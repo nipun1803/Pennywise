@@ -1,0 +1,20 @@
+# Backend only. MongoDB runs outside Docker (Atlas or your host's instance).
+services:
+  api:
+    image: pennywise-api:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI using --env-file}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET using --env-file}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    # Docker Desktop provides this hostname on macOS/Windows; also map Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stop_grace_period: 15s

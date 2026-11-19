@@ -1,0 +1,13 @@
+node_modules
+dist
+.test-dist
+coverage
+tests
+.env
+.env.*
+*.log
+.git
+.DS_Store
+README.md
+compose.yaml
+Dockerfile
