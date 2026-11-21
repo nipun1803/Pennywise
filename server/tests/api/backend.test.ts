@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createApp } from '../../src/app';
-import { User, Group, Expense, Settlement, ensureIndexes } from '../../src/models';
+import { User, Group, Expense, Settlement, Category, ensureIndexes } from '../../src/models';
 import { TOKEN_OPTIONS } from '../../src/middleware/auth';
 import { balancesFor } from '../../src/services/ledger';
 
@@ -19,9 +19,9 @@ let outsider: { id: string; token: string };
 let groupId: string;
 let code: string;
 const auth = (token = alice.token) => `Bearer ${token}`;
-const expenseBody = () => ({ description: 'Snacks', amountCents: 100, paidBy: alice.id, splitMode: 'all' });
+const expenseBody = () => ({ description: 'Snacks', amountCents: 100, paidBy: alice.id, splitMode: 'all', categoryId: 'food' });
 const paymentBody = () => ({ fromUser: bob.id, toUser: alice.id, amountCents: 20 });
-const postExpense = (key = randomUUID(), body = expenseBody(), token = alice.token) => request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth(token)).set('Idempotency-Key', key).send(body);
+const postExpense = (key = randomUUID(), body: Record<string, unknown> = expenseBody(), token = alice.token) => request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth(token)).set('Idempotency-Key', key).send(body);
 const postPayment = (key = randomUUID(), body = paymentBody(), token = alice.token) => request(app).post(`/groups/${groupId}/settlements`).set('Authorization', auth(token)).set('Idempotency-Key', key).send(body);
 
 beforeAll(async () => {
@@ -37,7 +37,7 @@ beforeAll(async () => {
   alice = await account('Alice'); bob = await account('Bob'); charlie = await account('Charlie'); outsider = await account('Outsider');
 });
 beforeEach(async () => {
-  await Promise.all([Group.deleteMany({}), Expense.deleteMany({}), Settlement.deleteMany({})]);
+  await Promise.all([Group.deleteMany({}), Expense.deleteMany({}), Settlement.deleteMany({}), Category.deleteMany({})]);
   const result = await request(app).post('/groups').set('Authorization', auth()).send({ name: 'Weekend trip' });
   expect(result.status).toBe(201);
   groupId = result.body.data.id; code = result.body.data.joinCode;
@@ -58,10 +58,11 @@ test('auth returns safe profiles, normalizes email, and hashes passwords', async
   expect(claims.exp! - claims.iat!).toBe(7 * 86400);
   expect((await request(app).post('/auth/signup').send({ name: 'Another', email: 'ALICE@example.com', password: 'long-password-123' })).status).toBe(409);
 });
-test('signup enforces 10 characters and the bcrypt byte limit', async () => {
-  for (const password of ['123456789', '🙂'.repeat(19)]) {
+test('signup enforces 8 characters and the bcrypt byte limit', async () => {
+  for (const password of ['1234567', '🙂'.repeat(19)]) {
     expect((await request(app).post('/auth/signup').send({ name: 'New', email: 'new@example.com', password })).status).toBe(400);
   }
+  expect((await request(app).post('/auth/signup').send({ name: 'New', email: 'new@example.com', password: 'abcd1234' })).status).toBe(201);
 });
 test('invalid credentials produce identical errors', async () => {
   const wrong = await request(app).post('/auth/login').send({ email: 'alice@example.com', password: 'wrong-password' });
@@ -139,7 +140,7 @@ test('equal splits are server-calculated and all-mode snapshots membership', asy
   await request(app).post('/groups/join').set('Authorization', auth(outsider.token)).send({ code });
   const list = await request(app).get(`/groups/${groupId}/expenses`).set('Authorization', auth());
   expect(list.body.data[0].splits).toHaveLength(3);
-  const selected = await request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth()).set('Idempotency-Key', randomUUID()).send({ description: 'For Bob', amountCents: 1, paidBy: alice.id, splitMode: 'selected', splitUserIds: [bob.id] });
+  const selected = await request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth()).set('Idempotency-Key', randomUUID()).send({ description: 'For Bob', amountCents: 1, paidBy: alice.id, splitMode: 'selected', splitUserIds: [bob.id], categoryId: 'other' });
   expect(selected.status).toBe(201); expect(selected.body.data.splits).toEqual([{ userId: bob.id, shareCents: 1 }]);
 });
 test.each([0, -1, 1.5, '100', Number.MAX_SAFE_INTEGER + 1])('rejects bad expense amount %s', async amountCents => {
@@ -335,7 +336,7 @@ test('expense corrections after settlement keep recorded payments and recompute 
 
 test('selected expense retries normalize IDs, keys and split order', async () => {
   const key = randomUUID();
-  const body = { description: ' Selected ', amountCents: 100, paidBy: alice.id, splitMode: 'selected', splitUserIds: [bob.id, alice.id] };
+  const body = { description: ' Selected ', amountCents: 100, paidBy: alice.id, splitMode: 'selected', splitUserIds: [bob.id, alice.id], categoryId: 'food' };
   const original = await request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth()).set('Idempotency-Key', key).send(body);
   const replay = await request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth()).set('Idempotency-Key', key.toUpperCase()).send({ ...body, description: 'Selected', paidBy: alice.id.toUpperCase(), splitUserIds: [alice.id.toUpperCase(), bob.id.toUpperCase()] });
   expect(original.status).toBe(201); expect(replay.body).toEqual(original.body);
@@ -365,7 +366,7 @@ test('settlement keys and actor/metadata fields cannot be spoofed', async () => 
 
 test('balance endpoints return 422 instead of rounding aggregate overflow', async () => {
   for (let i = 0; i < 2; i++) {
-    const result = await request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth()).set('Idempotency-Key', randomUUID()).send({ description: 'Large', amountCents: Number.MAX_SAFE_INTEGER, paidBy: alice.id, splitMode: 'selected', splitUserIds: [bob.id] });
+    const result = await request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth()).set('Idempotency-Key', randomUUID()).send({ description: 'Large', amountCents: Number.MAX_SAFE_INTEGER, paidBy: alice.id, splitMode: 'selected', splitUserIds: [bob.id], categoryId: 'other' });
     expect(result.status).toBe(201);
   }
   for (const endpoint of ['balances', 'settle-up']) {
@@ -398,5 +399,199 @@ test('database indexes enforce unique accounts, codes and creation request keys'
     expect(indexes.some(index => index.key.groupId === 1)).toBe(true);
     expect(indexes.some(index => index.key.groupId === 1 && index.key.createdBy === 1 && index.key.requestKey === 1 && index.unique)).toBe(true);
     expect(indexes.some(index => index.key.groupId === 1 && index.key.createdAt === -1 && index.key._id === -1)).toBe(true);
+  }
+});
+
+test('group and profile presets are validated and round-trip without email leakage', async () => {
+  const metadata = { description: ' A weekend away ', icon: 'airplane', color: 'violet' };
+  const changed = await request(app).patch(`/groups/${groupId}`).set('Authorization', auth()).send(metadata);
+  expect(changed.status).toBe(200); expect(changed.body.data).toMatchObject({ ...metadata, description: 'A weekend away' });
+  expect((await request(app).patch(`/groups/${groupId}`).set('Authorization', auth()).send({ description: 'x'.repeat(201) })).status).toBe(400);
+  expect((await request(app).patch(`/groups/${groupId}`).set('Authorization', auth(bob.token)).send({ color: 'rose' })).status).toBe(403);
+  expect((await request(app).patch('/me').set('Authorization', auth()).send({ avatar: 'leaf', avatarColor: 'rose' })).body.data).toMatchObject({ avatar: 'leaf', avatarColor: 'rose' });
+  expect((await request(app).patch('/me').set('Authorization', auth()).send({ avatar: 'uploaded' })).status).toBe(400);
+  await request(app).patch('/me').set('Authorization', auth()).send({ avatar: 'initials', avatarColor: 'emerald' });
+});
+
+test('concurrent first joins return one new membership and one atomic join event', async () => {
+  const results = await Promise.all(Array.from({ length: 8 }, () => request(app).post('/groups/join').set('Authorization', auth(outsider.token)).send({ code })));
+  expect(results.every(result => result.status === 200)).toBe(true);
+  expect(results.filter(result => result.body.alreadyMember === false)).toHaveLength(1);
+  expect(results.filter(result => result.body.alreadyMember === true)).toHaveLength(7);
+  const history = await request(app).get(`/groups/${groupId}/activity?kind=group`).set('Authorization', auth());
+  expect(history.status).toBe(200);
+  expect(history.body.data.filter((entry: { action: string; actorId: string }) => entry.action === 'member.joined' && entry.actorId === outsider.id)).toHaveLength(1);
+  expect((await Group.findById(groupId))!.members).toHaveLength(4);
+});
+
+test('excluded participants are validated, snapshotted, and idempotently normalized', async () => {
+  const key = randomUUID(); const body = { ...expenseBody(), splitMode: 'allExcept', excludedUserIds: [alice.id, charlie.id] };
+  const original = await postExpense(key, body);
+  expect(original.status).toBe(201); expect(original.body.data.splits).toEqual([{ userId: bob.id, shareCents: 100 }]);
+  await request(app).post('/groups/join').set('Authorization', auth(outsider.token)).send({ code });
+  const replay = await postExpense(key, { ...body, excludedUserIds: [charlie.id.toUpperCase(), alice.id.toUpperCase()] });
+  expect(replay.body).toEqual(original.body);
+  for (const invalid of [
+    { ...body, excludedUserIds: [] }, { ...body, excludedUserIds: [bob.id, bob.id] },
+    { ...body, excludedUserIds: [alice.id, bob.id, charlie.id, outsider.id] },
+    { ...body, splitMode: 'all' }, { ...body, splitUserIds: [bob.id] },
+  ]) expect((await postExpense(randomUUID(), invalid)).status).toBe(400);
+  const other = new mongoose.Types.ObjectId().toString();
+  expect((await postExpense(randomUUID(), { ...body, excludedUserIds: [other] })).status).toBe(400);
+});
+
+test('categories require valid choices, reject duplicates, and restrict archives to creator', async () => {
+  const path = `/groups/${groupId}/categories`;
+  const list = await request(app).get(`${path}?limit=3&page=2`).set('Authorization', auth());
+  expect(list.status).toBe(200); expect(list.body.data).toHaveLength(3); expect(list.body.pagination.total).toBe(10);
+  const create = await request(app).post(path).set('Authorization', auth(bob.token)).send({ name: ' Beach gear ', icon: 'bag', color: 'blue' });
+  expect(create.status).toBe(201); const categoryId = create.body.data.id;
+  expect((await request(app).post(path).set('Authorization', auth()).send({ name: 'beach GEAR' })).status).toBe(409);
+  expect((await request(app).post(path).set('Authorization', auth()).send({ name: 'Food & drinks' })).status).toBe(409);
+  expect((await request(app).patch(`${path}/${categoryId}`).set('Authorization', auth(bob.token)).send({ archived: true })).status).toBe(403);
+  const expense = await postExpense(randomUUID(), { ...expenseBody(), categoryId });
+  expect(expense.status).toBe(201); expect(expense.body.data.category.name).toBe('Beach gear');
+  await request(app).patch(`${path}/${categoryId}`).set('Authorization', auth()).send({ name: 'Beach things', archived: true });
+  expect((await request(app).get(`${path}?search=beach`).set('Authorization', auth())).body.data).toEqual([]);
+  expect((await request(app).get(`${path}?search=beach&includeArchived=true`).set('Authorization', auth())).body.data).toHaveLength(1);
+  expect((await postExpense(randomUUID(), { ...expenseBody(), categoryId })).status).toBe(400);
+  const kept = await request(app).put(`/groups/${groupId}/expenses/${expense.body.data.id}`).set('Authorization', auth()).send({ description: 'Updated gear', amountCents: 200, paidBy: alice.id, categoryId });
+  expect(kept.status).toBe(200); expect(kept.body.data.category.name).toBe('Beach gear');
+  const { categoryId: _category, ...uncategorized } = expenseBody();
+  expect((await request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth()).set('Idempotency-Key', randomUUID()).send(uncategorized)).status).toBe(400);
+  expect((await postExpense(randomUUID(), { ...expenseBody(), categoryId: 'unknown' })).status).toBe(400);
+  const other = await request(app).post('/groups').set('Authorization', auth()).send({ name: 'Other' });
+  expect((await request(app).post(`/groups/${other.body.data.id}/expenses`).set('Authorization', auth()).set('Idempotency-Key', randomUUID()).send({ ...expenseBody(), categoryId })).status).toBe(400);
+  const legacy = await Expense.findById(expense.body.data.id); legacy!.category = null; await legacy!.save();
+  expect((await request(app).get(`/groups/${groupId}/expenses/${legacy!._id}`).set('Authorization', auth())).body.data.category).toBeNull();
+});
+
+test('activity preserves concurrent before-images and deletion without leaking secrets', async () => {
+  const key = randomUUID(); const original = await postExpense(key); const path = `/groups/${groupId}/expenses/${original.body.data.id}`;
+  const edits = await Promise.all([200, 300, 400].map(amountCents => request(app).put(path).set('Authorization', auth()).send({ description: 'Corrected', amountCents, paidBy: alice.id })));
+  expect(edits.every(result => result.status === 200)).toBe(true);
+  await request(app).delete(path).set('Authorization', auth()); await request(app).delete(path).set('Authorization', auth());
+  await postExpense(key);
+  const history = await request(app).get(`/groups/${groupId}/activity?kind=expenses`).set('Authorization', auth());
+  expect(history.status).toBe(200); expect(history.body.pagination.total).toBe(5);
+  const chronological = [...history.body.data].reverse();
+  expect(chronological.map(entry => entry.action)).toEqual(['expense.created', 'expense.updated', 'expense.updated', 'expense.updated', 'expense.deleted']);
+  for (let i = 1; i < chronological.length; i++) expect(chronological[i].before.amountCents).toBe(chronological[i - 1].after.amountCents);
+  await request(app).post(`/groups/${groupId}/join-code`).set('Authorization', auth());
+  const all = await request(app).get(`/groups/${groupId}/activity`).set('Authorization', auth());
+  const json = JSON.stringify(all.body);
+  for (const secretValue of [code, key, 'alice@example.com', 'passwordHash', 'joinCode', 'creationResponse']) expect(json).not.toContain(secretValue);
+  expect((await request(app).get(`/groups/${groupId}/activity?kind=group&limit=1&page=2`).set('Authorization', auth())).body.data).toHaveLength(1);
+});
+
+test('failure to prepare an audit entry cannot persist the associated action', async () => {
+  // Fault at the audit actor lookup, including calls inside auditedUpdate.
+  const fail = jest.spyOn(User, 'findById').mockImplementation(() => { throw new Error('Audit unavailable'); });
+  try {
+    expect((await postExpense()).status).toBe(500);
+    expect(await Expense.countDocuments({ groupId })).toBe(0);
+    expect((await request(app).patch(`/groups/${groupId}`).set('Authorization', auth()).send({ name: 'Not saved' })).status).toBe(500);
+    expect((await Group.findById(groupId))!.name).toBe('Weekend trip');
+    expect((await request(app).post('/groups/join').set('Authorization', auth(outsider.token)).send({ code })).status).toBe(500);
+    expect((await Group.findById(groupId))!.members).toHaveLength(3);
+  } finally { fail.mockRestore(); }
+});
+
+test('statements use full corrected ledger, original dates, and page opening balances', async () => {
+  const first = await postExpense(); const second = await postExpense(); const payment = await postPayment();
+  const memberPath = `/groups/${groupId}/statements?view=member&userId=${bob.id}`;
+  const full = await request(app).get(memberPath).set('Authorization', auth());
+  expect(full.status).toBe(200); expect(full.body.data.rows).toHaveLength(3);
+  const balances = await request(app).get(`/groups/${groupId}/balances`).set('Authorization', auth());
+  expect(full.body.data.overallBalanceCents).toBe(balances.body.data.find((entry: { userId: string }) => entry.userId === bob.id).balanceCents);
+  const page2 = await request(app).get(`${memberPath}&limit=1&page=2`).set('Authorization', auth());
+  expect(page2.body.data.openingBalanceCents).toBe(full.body.data.rows[0].balanceCents);
+  expect(page2.body.data.rows[0]).toEqual(full.body.data.rows[1]); expect(page2.body.data.overallBalanceCents).toBe(full.body.data.overallBalanceCents);
+  expect((await request(app).get(`/groups/${groupId}/statements?view=spending&limit=1`).set('Authorization', auth())).body.data.overallBalanceCents).toBe(200);
+  await request(app).put(`/groups/${groupId}/expenses/${first.body.data.id}`).set('Authorization', auth()).send({ description: 'Corrected', amountCents: 300, paidBy: alice.id });
+  await request(app).delete(`/groups/${groupId}/expenses/${second.body.data.id}`).set('Authorization', auth());
+  const corrected = await request(app).get(`/groups/${groupId}/statements?view=spending`).set('Authorization', auth());
+  expect(corrected.body.data.overallBalanceCents).toBe(300); expect(corrected.body.data.rows).toHaveLength(1);
+  expect(corrected.body.data.rows[0].createdAt).toBe(first.body.data.createdAt);
+  await request(app).delete(`/groups/${groupId}/settlements/${payment.body.data.id}`).set('Authorization', auth());
+  const after = await request(app).get(memberPath).set('Authorization', auth());
+  expect(after.body.data.rows).toHaveLength(1);
+  expect((await request(app).get(`/groups/${groupId}/statements?userId=${outsider.id}`).set('Authorization', auth())).status).toBe(400);
+});
+
+test.each(['/categories', '/activity', '/statements'])('new group records are forbidden to outsiders: %s', async suffix => {
+  expect((await request(app).get(`/groups/${groupId}${suffix}`).set('Authorization', auth(outsider.token))).status).toBe(403);
+});
+
+test('group spending overflow returns 422 without rounded values', async () => {
+  for (let i = 0; i < 2; i++) await postExpense(randomUUID(), { ...expenseBody(), amountCents: Number.MAX_SAFE_INTEGER });
+  expect((await request(app).get(`/groups/${groupId}/statements?view=spending`).set('Authorization', auth())).status).toBe(422);
+});
+
+test('dashboard and global activity isolate membership and name payment participants', async () => {
+  await postExpense(); await postPayment();
+  await request(app).post('/groups').set('Authorization', auth(outsider.token)).send({ name: 'Private' });
+  const dashboard = await request(app).get('/dashboard').set('Authorization', auth());
+  expect(dashboard.status).toBe(200); expect(dashboard.body.data.groups).toHaveLength(1);
+  expect(dashboard.body.data.summaries[groupId]).toMatchObject({ expenseCount: 1, spendingCents: 100 });
+  const balances = await request(app).get(`/groups/${groupId}/balances`).set('Authorization', auth());
+  expect(dashboard.body.data.summaries[groupId].balanceCents).toBe(balances.body.data.find((b: { userId: string }) => b.userId === alice.id).balanceCents);
+  const feed = await request(app).get('/activity?kind=payments&limit=1').set('Authorization', auth());
+  expect(feed.status).toBe(200); expect(feed.body.data[0]).toMatchObject({ fromName: 'Bob', toName: 'Alice', action: 'payment.created' });
+  expect((await request(app).get('/activity').set('Authorization', auth(outsider.token))).body.data).toEqual([]);
+  expect((await request(app).get('/dashboard')).status).toBe(401);
+  expect((await request(app).get('/activity?kind=unknown').set('Authorization', auth())).status).toBe(400);
+});
+
+test('custom shares are exact, membership checked and order-normalized on retries', async () => {
+  const key = randomUUID(); const body = { ...expenseBody(), splitMode: 'custom', customSplits: [{ userId: alice.id, shareCents: 10 }, { userId: bob.id, shareCents: 90 }] };
+  const created = await postExpense(key, body);
+  expect(created.status).toBe(201); expect(created.body.data.splits).toEqual(body.customSplits);
+  expect((await postExpense(key, { ...body, customSplits: [...body.customSplits].reverse() })).body).toEqual(created.body);
+  for (const customSplits of [[{ userId: bob.id, shareCents: 99 }], [{ userId: outsider.id, shareCents: 100 }], [{ userId: bob.id, shareCents: 50 }, { userId: bob.id, shareCents: 50 }], [{ userId: bob.id, shareCents: -1 }]]) {
+    expect((await postExpense(randomUUID(), { ...body, customSplits })).status).toBe(400);
+  }
+});
+
+test('image presets round-trip, can be removed and arbitrary image URLs are rejected', async () => {
+  const path = `/groups/${groupId}`;
+  expect((await request(app).patch(path).set('Authorization', auth()).send({ image: 'preset:airplane' })).body.data.image).toBe('preset:airplane');
+  expect((await request(app).patch(path).set('Authorization', auth(bob.token)).send({ image: null })).status).toBe(403);
+  expect((await request(app).patch(path).set('Authorization', auth()).send({ image: null })).body.data.image).toBeNull();
+  expect((await request(app).patch('/me').set('Authorization', auth()).send({ image: 'https://example.com/a.jpg' })).status).toBe(400);
+  expect((await request(app).patch('/me').set('Authorization', auth()).send({ image: 'preset:heart' })).body.data.image).toBe('preset:heart');
+  await request(app).patch('/me').set('Authorization', auth()).send({ image: null });
+  expect((await request(app).post('/media/images').send({ image: 'invalid' })).status).toBe(401);
+});
+
+test('backend serves Swagger UI and the bearer-auth OpenAPI document', async () => {
+  const spec = await request(app).get('/openapi.json');
+  expect(spec.status).toBe(200); expect(spec.body.openapi).toBe('3.1.0');
+  expect(spec.body.components.securitySchemes.bearerAuth.scheme).toBe('bearer');
+  expect(spec.body.paths['/groups/{id}/expenses'].post.parameters.some((p: { name: string }) => p.name === 'Idempotency-Key')).toBe(true);
+  expect(spec.body.paths['/media/images'].post.security).toEqual([{ bearerAuth: [] }]);
+  const docs = await request(app).get('/docs/');
+  expect(docs.status).toBe(200); expect(docs.text).toContain('swagger-ui');
+});
+
+test('photo uploads are signed server-side and return the provider URL without credentials', async () => {
+  const previous = [process.env.CLOUDINARY_CLOUD_NAME, process.env.CLOUDINARY_API_KEY, process.env.CLOUDINARY_API_SECRET];
+  process.env.CLOUDINARY_CLOUD_NAME = 'test-cloud'; process.env.CLOUDINARY_API_KEY = 'test-key'; process.env.CLOUDINARY_API_SECRET = 'test-secret';
+  const url = 'https://res.cloudinary.com/test-cloud/image/upload/pennywise/test.jpg';
+  const remote = jest.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ secure_url: url, resource_type: 'image' }) } as Response);
+  try {
+    const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2G3sAAAAASUVORK5CYII=';
+    const uploaded = await request(app).post('/media/images').set('Authorization', auth()).send({ image });
+    expect(uploaded.status).toBe(201); expect(uploaded.body).toEqual({ data: { image: url } });
+    const form = remote.mock.calls[0]![1]!.body as FormData;
+    const publicId = form.get('public_id'); const timestamp = form.get('timestamp');
+    expect(publicId).toEqual(expect.stringContaining(`pennywise/${alice.id}/`));
+    expect(form.get('signature')).toBe(crypto.createHash('sha1').update(`public_id=${publicId}&timestamp=${timestamp}test-secret`).digest('hex'));
+    expect((await request(app).post('/media/images').set('Authorization', auth()).send({ image: 'data:image/jpeg;base64,aGVsbG8=' })).status).toBe(400);
+    delete process.env.CLOUDINARY_API_SECRET;
+    expect((await request(app).post('/media/images').set('Authorization', auth()).send({ image })).status).toBe(503);
+  } finally {
+    remote.mockRestore();
+    ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'].forEach((key, i) => { if (previous[i] === undefined) delete process.env[key]; else process.env[key] = previous[i]; });
   }
 });
