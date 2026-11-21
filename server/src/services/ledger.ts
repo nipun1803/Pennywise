@@ -5,26 +5,34 @@ import type { ExpenseInput } from '../validators';
 import { ApiError } from '../utils/errors';
 import { expenseView, settlementView } from '../utils/serialize';
 import { createOnce, fingerprint } from './idempotency';
+import { expenseCategory } from './categories';
+import { auditedUpdate, auditEvent } from './audit';
 
 export function checkMembers(group: GroupRecord, ids: readonly string[]) {
   const members = new Set(group.members.map(String));
   if (ids.some(id => !members.has(id))) throw new ApiError(400, 'INVALID_MEMBERS', 'Payer and all payment/split users must be group members');
 }
-function expenseFields(group: GroupRecord, input: ExpenseInput, existing?: ExpenseRecord) {
+async function expenseFields(group: GroupRecord, input: ExpenseInput, existing?: ExpenseRecord) {
+  if (input.excludedUserIds) checkMembers(group, input.excludedUserIds);
   const ids = input.splitMode === 'all' ? group.members.map(String)
+    : input.splitMode === 'allExcept' ? group.members.map(String).filter(id => !input.excludedUserIds!.includes(id))
     : input.splitMode === 'selected' ? input.splitUserIds!
+    : input.splitMode === 'custom' ? input.customSplits!.map(s => s.userId)
     : existing!.splits.map(s => String(s.userId));
   checkMembers(group, [input.paidBy, ...ids]);
+  if (!ids.length) throw new ApiError(400, 'INVALID_MEMBERS', 'Include at least one participant');
   return { description: input.description, amountCents: input.amountCents, paidBy: new Types.ObjectId(input.paidBy),
-    splits: equalSplit(input.amountCents, ids).map(s => ({ userId: new Types.ObjectId(s.userId), shareCents: s.shareCents })) };
+    category: await expenseCategory(group, input.categoryId, existing?.category),
+    splits: (input.splitMode === 'custom' ? input.customSplits! : equalSplit(input.amountCents, ids)).map(s => ({ userId: new Types.ObjectId(s.userId), shareCents: s.shareCents })) };
 }
 export async function createExpense(group: GroupRecord, userId: string, key: string, input: ExpenseInput) {
-  const hash = fingerprint({ ...input, ...(input.splitUserIds ? { splitUserIds: [...input.splitUserIds].sort() } : {}) });
+  const hash = fingerprint({ ...input, ...(input.customSplits ? { customSplits: [...input.customSplits].sort((a, b) => a.userId.localeCompare(b.userId)) } : {}), ...(input.splitUserIds ? { splitUserIds: [...input.splitUserIds].sort() } : {}), ...(input.excludedUserIds ? { excludedUserIds: [...input.excludedUserIds].sort() } : {}) });
   return createOnce('expense', { groupId: String(group._id), userId, key, hash }, async () => {
     const now = new Date();
-    const record = new Expense({ ...expenseFields(group, input), _id: new Types.ObjectId(), groupId: group._id,
+    const record = new Expense({ ...await expenseFields(group, input), _id: new Types.ObjectId(), groupId: group._id,
       createdBy: userId, createdAt: now, updatedAt: now, requestKey: key, requestHash: hash });
     const response = { data: expenseView(record) };
+    record.auditEvents = [await auditEvent(userId, 'expense.created', null, response.data)];
     record.creationResponse = response;
     await record.save({ timestamps: false });
     return response;
@@ -41,15 +49,21 @@ export function checkExpensePermission(group: GroupRecord, userId: string, expen
 export async function editExpense(group: GroupRecord, userId: string, expenseId: string, input: ExpenseInput) {
   const existing = await getExpense(String(group._id), expenseId);
   checkExpensePermission(group, userId, existing);
-  const updated = await Expense.findOneAndUpdate({ _id: expenseId, groupId: group._id, deletedAt: null },
-    { $set: { ...expenseFields(group, input, existing), updatedBy: userId } }, { returnDocument: 'after', runValidators: true });
+  const updated = await auditedUpdate(Expense, { _id: expenseId, groupId: group._id, deletedAt: null }, userId, 'expense.updated', async before => {
+    checkExpensePermission(group, userId, before);
+    const fields = await expenseFields(group, input, before);
+    return { updates: { ...fields, updatedBy: userId }, before: expenseView(before), after: expenseView({ ...before, ...fields }) };
+  });
   if (!updated) throw new ApiError(404, 'NOT_FOUND', 'Expense not found');
   return expenseView(updated);
 }
 export async function deleteExpense(group: GroupRecord, userId: string, expenseId: string) {
   const expense = await getExpense(String(group._id), expenseId, true);
   checkExpensePermission(group, userId, expense);
-  await Expense.updateOne({ _id: expenseId, groupId: group._id, deletedAt: null }, { $set: { deletedAt: new Date(), deletedBy: userId, updatedBy: userId } });
+  await auditedUpdate(Expense, { _id: expenseId, groupId: group._id }, userId, 'expense.deleted', before => {
+    checkExpensePermission(group, userId, before);
+    return before.deletedAt ? null : { updates: { deletedAt: new Date(), deletedBy: userId, updatedBy: userId }, before: expenseView(before), after: null };
+  });
 }
 export async function createSettlement(group: GroupRecord, userId: string, key: string, input: { fromUser: string; toUser: string; amountCents: number }) {
   return createOnce('settlement', { groupId: String(group._id), userId, key, hash: fingerprint(input) }, async () => {
@@ -58,6 +72,7 @@ export async function createSettlement(group: GroupRecord, userId: string, key: 
     const record = new Settlement({ ...input, _id: new Types.ObjectId(), groupId: group._id, createdBy: userId,
       createdAt: now, updatedAt: now, requestKey: key, requestHash: fingerprint(input) });
     const response = { data: settlementView(record) };
+    record.auditEvents = [await auditEvent(userId, 'payment.created', null, response.data)];
     record.creationResponse = response;
     await record.save({ timestamps: false });
     return response;
@@ -65,15 +80,16 @@ export async function createSettlement(group: GroupRecord, userId: string, key: 
 }
 export async function editSettlement(group: GroupRecord, userId: string, settlementId: string, input: { fromUser: string; toUser: string; amountCents: number }) {
   checkMembers(group, [input.fromUser, input.toUser]);
-  const updated = await Settlement.findOneAndUpdate({ _id: settlementId, groupId: group._id, deletedAt: null },
-    { $set: { ...input, updatedBy: userId } }, { returnDocument: 'after', runValidators: true });
+  const updated = await auditedUpdate(Settlement, { _id: settlementId, groupId: group._id, deletedAt: null }, userId, 'payment.updated', before => ({
+    updates: { ...input, updatedBy: userId }, before: settlementView(before), after: { ...settlementView(before), ...input },
+  }));
   if (!updated) throw new ApiError(404, 'NOT_FOUND', 'Settlement not found');
   return settlementView(updated);
 }
 export async function deleteSettlement(group: GroupRecord, userId: string, settlementId: string) {
   const existing = await Settlement.findOne({ _id: settlementId, groupId: group._id }).lean();
   if (!existing) throw new ApiError(404, 'NOT_FOUND', 'Settlement not found');
-  await Settlement.updateOne({ _id: settlementId, groupId: group._id, deletedAt: null }, { $set: { deletedAt: new Date(), deletedBy: userId, updatedBy: userId } });
+  await auditedUpdate(Settlement, { _id: settlementId, groupId: group._id }, userId, 'payment.deleted', before => before.deletedAt ? null : { updates: { deletedAt: new Date(), deletedBy: userId, updatedBy: userId }, before: settlementView(before), after: null });
 }
 export async function balancesFor(group: GroupRecord) {
   const [expenses, settlements] = await Promise.all([
