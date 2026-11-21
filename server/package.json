@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "Pennywise expense-sharing REST API",
   "main": "dist/index.js",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "seed": "tsx scripts/seed.ts",
+    "dev:preview": "tsx scripts/frontend-preview.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
@@ -25,6 +29,7 @@
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.12.2",
+    "swagger-ui-express": "^5.0.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -36,6 +41,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.6.6",
     "@types/supertest": "^7.2.1",
+    "@types/swagger-ui-express": "^4.1.8",
     "eslint": "^10.15.0",
     "globals": "^17.14.0",
     "jest": "^30.5.2",
