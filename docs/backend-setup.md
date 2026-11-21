@@ -117,6 +117,8 @@ API tests launch an isolated **standalone** MongoDB using mongodb-memory-server,
 
 Coverage includes money validation, remainder cents, zero shares, zero-sum balances, generated ledgers, greedy settlement correctness/bounds, bcrypt/JWT auth, membership isolation, code rotation, pagination/search, permission checks, edits/deletions, partial/overpayments, and concurrent/replayed creations surviving later corrections.
 
+The frontend extensions add categories/exclusions, group/profile presets, reliable concurrent join status, audit failure atomicity, concurrent audit before-images, deleted activity, and full-ledger corrected statements.
+
 The cross-check results and remaining limitations are recorded in [backend-audit.md](backend-audit.md).
 
 ## Structure
@@ -151,7 +153,7 @@ Each expense/settlement atomically stores immutable request-key/hash/original-re
 
 Expenses and settlements use soft deletion. Expense tombstones are hidden from normal lists; settlement tombstones remain in shared history. Both are excluded from balance calculations. Do not physically purge records or expire request keys without revising the retry guarantees. Original response snapshots increase storage usage.
 
-Independent edits are not a transaction and use last-write-wins semantics. Full-ledger reads reflect server data, but are not promised to be a single cross-collection snapshot during concurrent writes. There are no persisted running totals.
+Independent edits use version-checked atomic updates with bounded retries and accurate audit before-images. The last successful correction wins; repeated conflicts can return 409. Full-ledger reads are not promised to be a single cross-collection snapshot during concurrent writes. There are no persisted running totals. Embedded activity histories are retained indefinitely and share MongoDB's 16 MiB document limit with the action record.
 
 ## Production deployment checklist
 
@@ -168,8 +170,8 @@ Backend-only Docker support is available. No live deployment or paid resources w
 
 Changing `JWT_SECRET` invalidates all existing tokens. There is no refresh, password reset, verification, payments integration, offline write queue, or social login.
 
-## Connecting a mobile client later
+## Connecting the mobile client
 
 On a physical phone, `localhost` refers to the phone, not this Mac. Use the Mac's reachable LAN IP and server port, e.g. `http://192.168.1.20:3000`, during development; both devices need network access. Android emulators commonly use `http://10.0.2.2:3000`; iOS simulators can generally access the Mac's localhost. Production clients use the deployed HTTPS URL.
 
-Frontend Expo/React Native changes were not made. Follow the client's `AGENTS.md` and matching Expo documentation when implementing that integration.
+The Android-first Expo SDK 58 client is implemented. See [client setup](../client/README.md) and [API contracts](api.md). `npm run dev:preview` inside `server/` starts a disposable standalone database and API on port 3000 for frontend testing; it never reads `.env` or `MONGODB_URI`, and its data is lost on shutdown. Do not deploy that preview script or use real credentials with it.

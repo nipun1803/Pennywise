@@ -1,56 +1,80 @@
-# Welcome to your Expo app 👋
+# Pennywise client
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Android-first Expo SDK 58 / React Native 0.88 app, with iOS and web compatibility. Shared expenses only: no personal budgeting, income tracking, or money transfers. Backend contracts: [API reference](../docs/api.md).
 
-## Get started
+## Run
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+Use Node.js 22.13+ and npm. Inside `client/`:
 
 ```bash
-npm run reset-project
+npm ci
+cp .env.example .env
+npx expo start
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+Set `EXPO_PUBLIC_API_URL` in `client/.env`. It is public configuration, not a place for secrets. Defaults without the variable are `http://10.0.2.2:3000` on Android and `http://localhost:3000` on iOS/web. The example uses localhost; **change it for Android/physical phones**.
 
-### Other setup steps
+- Android emulator: `http://10.0.2.2:3000`.
+- iOS simulator / web on this Mac: `http://localhost:3000`.
+- Physical phone: the Mac's reachable LAN address, such as `http://192.168.1.20:3000`; same trusted network. `localhost` is the phone itself.
+- Production: deployed **HTTPS** API URL. Browser CORS must include the exact web origin.
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Run the persistent backend using [backend setup](../docs/backend-setup.md). For a disposable preview, run `npm run dev:preview` inside `server/` in another terminal. That script ignores real database configuration, creates a temporary standalone MongoDB, and binds the API on port 3000. Do not use it in production; accounts/data disappear on shutdown.
 
-## Learn more
+`npm run web` starts the browser preview. For native testing use a development build; never hand-edit generated `android/` or `ios/` directories. Follow [development builds](https://docs.expo.dev/develop/development-builds/introduction.md) and the installed SDK's documentation. Adding native libraries requires rebuilding the development client. No store submission, signing, or cloud build has been performed.
 
-To learn more about developing your project with Expo, look at the following resources:
+### Android startup: missing ExpoCrypto
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Mutation keys use Expo's built-in `uuid.v4()`, so they do not require the separate `ExpoCrypto` native module. After updating the client, stop Metro, run `npx expo start --clear` from `client/`, and reopen the app to replace the old bundle. The associated route-default-export warnings came from the failed import; the screens already export their components. If a different native module is missing, use an SDK 58-compatible Expo Go app or rebuild your development app; clearing Metro cannot install native modules.
 
-## Join the community
+## Screens and behavior
 
-Join our community of developers creating universal apps.
+- Welcome → Login / Signup / Join. A validated six-character code survives switching between auth screens and joins after authentication. Clipboard is read only after tapping **Paste code**.
+- Home · Groups · Profile. Home requests `/groups?page=1&limit=5`, newest-created first, without card balances. Add Expense uses the server's total: zero explains Create/Join; one skips selection; multiple show a paginated picker.
+- Group overview: invite Copy/Share, own balance, Expenses · Balances · Payments, Members, Settings, and Activity & Statements.
+- Equal splitting: Everyone with searchable exclusions or selected members; at least one participant; payer may be excluded. Category and description required. Shares appear from the server after saving.
+- Payments are unverified external records, including partial/overpayments and entries on someone else's behalf. Overpayment and correction confirmations do not initiate or reverse transfers.
+- Creator-only group metadata/code rotation and category rename/archive. Any member may create categories or record/correct/delete payments. Expense changes require author/creator permission. Preset icons/colors/avatars only, no uploads.
+- Group Records: activity with actor/time and before/after details, corrected member account (self by default), and group spending excluding repayments. History starts with the feature rollout; earlier actions are not reconstructed.
+- Profile: name, initials/preset avatar, System/Light/Dark emerald theme, Logout.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Session, cache, and retries
+
+Native sessions use SecureStore. Web credentials are deliberately **memory-only** and are lost on page reload; there is no persistent web login. Theme is local and survives Logout. Account/page caches contain loaded API data only; credentials are never put into AsyncStorage. Logout/expiry clears account caches and credentials and cancels in-flight requests; late old-session responses are rejected.
+
+Protected 401 and local token expiry return to Welcome with “Please log in again.” Invalid login stays on Login. JWTs last seven days, without refresh or server revocation. A copied JWT remains valid after local Logout until expiry/secret rotation.
+
+Offline shows saved pages with a saved-data banner. Writes are disabled, with an explanation; there is **no offline queue**. Unloaded pages/search results cannot be invented. Focus, reconnect, pull-to-refresh, and successful mutations refetch current data. Unavailable balances are never shown as zero.
+
+Expense/payment POSTs generate a UUID `Idempotency-Key`. Network/5xx uncertainty retains that key and the exact intended payload for an unchanged retry; edited retries are blocked with instructions to check the group first. The retry intent lives in the mounted form, not an offline queue. Do not navigate away/restart and blindly create another record after an uncertain save. The server retains original creation responses even after corrections/deletion.
+
+Money uses safe integer paise with exact Indian grouping through shared `formatINR`; inputs accept positive amounts with at most two decimal places. API field names keep their historical `Cents` suffix.
+
+## Checks
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+npx expo-doctor
+```
+
+Core tests run with Node's test runner and TypeScript transpilation in a sandbox with mocked native modules. They check exact INR/input parsing, join-code/JWT handling, protected/public 401 behavior, stale-session responses, secure storage, and account-cache isolation. They do not substitute for native-device tests.
+
+Production web export: `npx expo export --platform web`. Android/iOS bundle exports check compilation, not native signing, OS behavior, keyboard/safe areas, or device networking. Native clipboard/share sheets and SecureStore must still be exercised on a development build before release.
+
+## Structure
+
+- `src/app/`: Expo Router screens/navigators only.
+- `src/components/ui/app-ui.tsx`, `src/theme/`: emerald UI primitives/presets.
+- `src/providers/app-provider.tsx`: session, connectivity, theme, messages, retained join code.
+- `src/lib/`: API, safe integer formatting, types, secure session/account cache storage.
+- `src/hooks/`: focus-aware cached resources and idempotent mutations.
+- `src/screens/`: reusable auth, group forms, and category manager; retained starter examples are not routes.
+
+Read `AGENTS.md` before Expo/React Native changes. Public launch also needs backend rate limits and a review of dependency advisories and retained audit-document sizes; see the backend deployment checklist.
+# Photos and new tests
+
+Photo uploads use the backend's `/media/images` endpoint. Add `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` to `server/.env`, then restart the API. Find these in your Cloudinary dashboard's API Keys settings. Never put the secret in an `EXPO_PUBLIC_*` variable or commit `.env`. Built-in group icons and initials work without credentials. The picker supports JPEG/PNG/WebP images up to 5 MB; uploaded photos are public URLs. New native builds need the added image-picker permission plugin; Expo Go already includes image-picker.
+
+Run `npm run test:components` for React Native Testing Library tests (Jest/Expo). Existing pure unit tests remain available with `npm test`. Home and Reports now use `/dashboard`; Activity uses the globally paginated `/activity` endpoint. Restart the backend alongside the client update.

@@ -4,16 +4,18 @@ Reviewed against the original backend requirements **and the later decisions in 
 
 ## Scope and endpoint coverage
 
-All **22 agreed HTTP endpoints** are registered and documented in the per-feature tables in [api.md](api.md):
+All **28 agreed HTTP endpoints**, including the frontend-approved extensions, are registered and documented in [api.md](api.md):
 
 - Authentication/profile: 4.
 - Groups/membership: 7.
-- Expenses: 4.
+- Expenses: 5.
 - Balances/settle-up: 2.
 - Settlement records/history/corrections: 4.
+- Categories: 3.
+- Activity/statements: 2.
 - Health: 1.
 
-A regression test compares the documentation tables against the route registrations and rejects missing/duplicate table entries. The Docker smoke test exercises all 22 endpoints against the compiled containerized server.
+A regression test compares documentation tables against route registrations and rejects missing/duplicate entries. The Docker smoke script now covers all 28 endpoints; the earlier 22-endpoint container result does not verify the extensions.
 
 ## Decisions checked
 
@@ -23,14 +25,15 @@ A regression test compares the documentation tables against the route registrati
 | Accounts | Name/email/password signup; email/password login | API tests verify normalization, hashing, duplicate emails and generic login failures |
 | Passwords | Minimum 10 Unicode characters; bcrypt-safe byte length | Signup and login enforce the 72-byte boundary; truncation-regression test passes |
 | Sessions | Seven-day JWT; no refresh/reset/verification | HS256, subject, issuer, audience and expiry verification; invalid/expired/wrong-audience tokens tested |
-| Profile | Display-name editing only | GET/PATCH `/me`; email/password updates rejected |
-| Groups | Creation takes only name; creator becomes first member | Tested; no capacity field or member input; extra capacity input rejected |
+| Profile | Name and preset avatar/color | GET/PATCH `/me`; presets validated; email/password updates rejected |
+| Groups | Name, optional description/preset icon/color; creator becomes first member | Description length/presets and creator-only metadata changes tested; no capacity field or member input |
 | Capacity | No application member/group count limit | Joining beyond the earlier 16-member proposal tested; finite MongoDB limits still apply |
-| Joining | Unique six-character code, excluded look-alikes, automatic membership | Cryptographic generation, unique index, collision retries, normalized code lookup and atomic duplicate-safe joins tested |
+| Joining | Six-character code, automatic membership, reliable `alreadyMember` | Concurrent first joins return exactly one new membership and one embedded join event |
 | Group privacy | Only members read/write; users list only their groups | Read/write isolation, creator-only rename/rotation, and cross-group record-ID checks tested |
-| Code sharing | All members can see the code | Group list/detail responses include it; frontend copy/share UI remains future work |
+| Code sharing | All members can see/copy/share code | Group list/detail responses include it; frontend actions implemented; native sheets still require device checks |
 | Members/lists | Page numbers, default 25, maximum 100; name search | Validated pagination and literal case-insensitive search; member emails excluded |
-| Expenses | Integer cents; equal split among everyone-at-creation or selected members | Server derives shares; 100/3 = 34,33,33; tiny amounts allow zero shares; non-member and duplicate splits rejected |
+| Expenses | Integer paise; everyone, selected, or everyone with exclusions | Server derives shares; deterministic remainders/zero shares; non-member/duplicate/empty participants rejected; snapshots and normalized exclusion retries tested |
+| Categories | Required for new expenses; standard/custom categories; creator-only rename/archive | Duplicate names, archived/cross-group choices, legacy null category, permissions, and preserved snapshots tested |
 | Payer | Any group member; participation in split optional | Selected split may exclude payer; tested |
 | Expense corrections | Author or creator only; allowed after recorded payments | Permission tests; omitted splits preserve participants; changed amount/payer recalculates shares; payments remain unchanged |
 | Balances | Full active ledger on each request; no running totals; zero sum | Pure shared functions and generated-ledger tests; pagination never limits calculation input; overflow returns 422 |
@@ -43,7 +46,9 @@ A regression test compares the documentation tables against the route registrati
 | Storage | Standalone local MongoDB or Atlas; no replica-set requirement | API tests use actual isolated standalone MongoDB; Atlas connection/setup documented, not live-tested |
 | Docker | Backend only | Multi-stage build, pruned production dependencies, non-root runtime, healthcheck, external database; container smoke test passes |
 | Rate limits | Defer until frontend completion | Intentionally absent, including join-code limiting; tracked as required pre-production work |
-| Frontend/offline | Cached loaded-page reads; no offline writes; SecureStore token | Integration requirements documented; no frontend code changed or claimed complete |
+| Frontend/offline | Cached loaded-page reads; no offline writes; SecureStore token | Implemented; core tests cover storage/cache/session behavior; native-device verification still pending |
+| Activity | Embedded atomic events with actor/time/before/after, deleted records retained | Concurrent before-image chain and fault-injected audit failure atomicity tested; invite/credential leakage checked |
+| Statements | Corrected ledger at original dates; full-ledger running totals | Matches member balances; pagination opening totals, deleted exclusion, group spending and overflow tested |
 | Non-goals | No real payments, currency conversion, scanning, push, placeholders, social/OTP login | None added; no group leaving/archive/deletion or ownership-transfer APIs added |
 
 ## Bugs reproduced and fixed
@@ -56,7 +61,7 @@ Each bug was reproduced by a failing regression test before applying the fix.
 
 ## Verification
 
-Latest cross-check: **73 Jest tests passed across 3 suites**, including 17 unit/documentation tests. Build, typecheck, lint, the standalone API tests, and the Docker smoke covering all 22 endpoints passed. `npm audit --omit=dev` reported zero production dependency vulnerabilities.
+Frontend-extension check: **84 Jest tests passed across 3 suites** on an isolated standalone MongoDB; backend build/typecheck/lint pass. Earlier container verification covered the original 22 endpoints; re-run the expanded 28-endpoint script against a rebuilt image. Earlier dependency-audit results are not a guarantee about future advisories. Client checks and native-testing limits are described in [client setup](../client/README.md).
 
 Run from `server/`:
 
@@ -79,8 +84,9 @@ Container testing uses an isolated host-side standalone MongoDB and a uniquely n
 - Rate limiting is still deferred by explicit instruction. Add signup/login/join brute-force protection before public exposure; share limiter state across multiple instances.
 - JWT logout is device-local. A copied token remains valid until expiry or secret rotation.
 - Full-ledger reads are not a cross-collection transaction snapshot during simultaneous edits. Counts/pages may shift; independent corrections remain last-write-wins as documented. No running totals are stored.
-- Latest payment correction attribution is retained, not a full version-by-version edit audit. Any-member correction permissions are intentional and require group trust; the backend does not verify actual money transfers.
+- Full version-by-version activity begins with this rollout; older actions cannot be reconstructed. Any-member payment corrections are intentional and require group trust; the backend does not verify actual money transfers.
 - Tombstones and original creation responses are retained indefinitely for idempotency. Large groups/ledgers remain subject to document, request-size, memory and CPU limits; no large production-load benchmark was performed.
 - Production npm dependencies report zero current advisories. The Jest development dependency tree still reports moderate glob/minimatch advisories; no forced breaking dependency update was applied. This does not constitute an OS-container vulnerability scan.
 - Docker was built/run on this Apple Silicon machine. Other architectures and live Atlas/hosting environments were not exercised. No paid resource or live deployment was created.
-- Frontend welcome/auth/join retention, SecureStore, AsyncStorage cache isolation, offline banners/write disabling, reconnect refetches, scroll/search UI and copy/share sheets still require frontend implementation.
+- The client is implemented, but compilation/web checks do not prove Android/iOS keyboard, safe-area, SecureStore, clipboard, share-sheet, or connectivity behavior. Test development builds on actual devices before release.
+- Embedded audit arrays are retained with the action document, not a separate transaction-dependent collection. Monitor MongoDB's 16 MiB document limit; full histories are not silently pruned. There has been no large-scale load benchmark.
