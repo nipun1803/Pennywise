@@ -53,7 +53,7 @@ async function main() {
   const published = (await docker(['port', name, '3000/tcp'])).stdout.trim();
   const base = `http://${published}`;
   const seen = new Set();
-  let groupId; let expenseId; let settlementId;
+  let groupId; let expenseId; let settlementId; let categoryId;
   async function api(method, route, body, token, key, expected = 200) {
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -63,7 +63,7 @@ async function main() {
     });
     assert.equal(response.status, expected, `${method} ${route}`);
     let pattern = route.split('?')[0];
-    for (const [value, replacement] of [[groupId, ':id'], [expenseId, ':eid'], [settlementId, ':sid']]) {
+    for (const [value, replacement] of [[groupId, ':id'], [expenseId, ':eid'], [settlementId, ':sid'], [categoryId, ':cid']]) {
       if (value) pattern = pattern.replaceAll(value, replacement);
     }
     seen.add(`${method} ${pattern}`);
@@ -85,13 +85,18 @@ async function main() {
   await api('GET', `/groups/${groupId}`, undefined, alice.token);
   assert.equal((await api('GET', `/groups/${groupId}/members?search=ALICE`, undefined, alice.token)).data.length, 1);
   await api('PATCH', `/groups/${groupId}`, { name: 'Renamed Docker group' }, alice.token);
+  assert.equal((await api('GET', `/groups/${groupId}/categories`, undefined, alice.token)).pagination.total, 10);
+  categoryId = (await api('POST', `/groups/${groupId}/categories`, { name: 'Supplies', icon: 'bag', color: 'blue' }, bob.token, undefined, 201)).data.id;
+  await api('PATCH', `/groups/${groupId}/categories/${categoryId}`, { archived: true }, alice.token);
   const key = randomUUID();
-  const expense = { description: 'Dinner', amountCents: 100, paidBy: alice.user.id, splitMode: 'all' };
+  const expense = { description: 'Dinner', amountCents: 100, paidBy: alice.user.id, splitMode: 'all', categoryId: 'food' };
   const original = await api('POST', `/groups/${groupId}/expenses`, expense, alice.token, key, 201);
   expenseId = original.data.id;
+  assert.equal((await api('GET', `/groups/${groupId}/expenses/${expenseId}`, undefined, alice.token)).data.category.id, 'food');
   assert.deepEqual(await api('POST', `/groups/${groupId}/expenses`, expense, alice.token, key, 201), original);
   await api('GET', `/groups/${groupId}/expenses?page=1&limit=1`, undefined, alice.token);
   await api('PUT', `/groups/${groupId}/expenses/${expenseId}`, { description: 'Corrected dinner', amountCents: 200, paidBy: alice.user.id }, alice.token);
+  assert.equal((await api('GET', `/groups/${groupId}/statements?view=spending`, undefined, alice.token)).data.overallBalanceCents, 200);
   const balances = (await api('GET', `/groups/${groupId}/balances`, undefined, bob.token)).data;
   assert.equal(balances.reduce((sum, b) => sum + b.balanceCents, 0), 0);
   assert.equal((await api('GET', `/groups/${groupId}/settle-up`, undefined, bob.token)).data.length, 1);
@@ -103,17 +108,18 @@ async function main() {
   await api('DELETE', `/groups/${groupId}/expenses/${expenseId}`, undefined, alice.token, undefined, 204);
   assert.deepEqual(await api('POST', `/groups/${groupId}/expenses`, expense, alice.token, key, 201), original);
   assert.equal((await api('GET', `/groups/${groupId}/expenses`, undefined, alice.token)).data.length, 0);
+  assert.ok((await api('GET', `/groups/${groupId}/activity?kind=expenses`, undefined, alice.token)).data.some(event => event.action === 'expense.deleted'));
   const code = (await api('POST', `/groups/${groupId}/join-code`, undefined, alice.token)).data.joinCode;
   await api('POST', '/groups/join', { code: group.joinCode }, outsider.token, undefined, 404);
   await api('POST', '/groups/join', { code }, outsider.token);
-  assert.equal(seen.size, 22, 'Every implemented endpoint must be exercised');
+  assert.equal(seen.size, 28, 'Every implemented endpoint must be exercised');
 
   const inspection = JSON.parse((await docker(['inspect', name])).stdout)[0];
   assert.equal(inspection.Config.User, 'node');
   const healthCommand = inspection.Config.Healthcheck.Test[1];
   await docker(['exec', name, 'sh', '-c', healthCommand]);
   await docker(['exec', name, 'node', '-e', "const fs=require('node:fs'); if(fs.existsSync('.env') || fs.existsSync('tests') || fs.existsSync('node_modules/typescript') || fs.existsSync('node_modules/mongodb-memory-server')) process.exit(1)"]);
-  console.log('Docker smoke passed: all 22 endpoints, permissions, retries, non-root runtime, healthcheck, and production-only files.');
+  console.log('Docker smoke passed: all 28 endpoints, permissions, retries, categories, activity, statements, non-root runtime, healthcheck, and production-only files.');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

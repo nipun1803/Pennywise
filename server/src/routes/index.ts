@@ -6,12 +6,20 @@ import * as users from '../controllers/users';
 import * as groups from '../controllers/groups';
 import * as expenses from '../controllers/expenses';
 import * as settlements from '../controllers/settlements';
+import * as categories from '../controllers/categories';
+import * as records from '../controllers/records';
+import * as dashboard from '../controllers/dashboard';
+import * as media from '../controllers/media';
+import express from 'express';
 
 export function apiRoutes(secret: string) {
   const router = Router();
   router.post('/auth/signup', auth.signup(secret));
   router.post('/auth/login', auth.login(secret));
   router.use(authenticate(secret));
+  router.post('/media/images', express.json({ limit: '7mb' }), media.upload);
+  router.get('/dashboard', dashboard.summary);
+  router.get('/activity', dashboard.activity);
   router.get('/me', users.me);
   router.patch('/me', users.updateName);
   router.post('/groups', groups.create);
@@ -23,10 +31,16 @@ export function apiRoutes(secret: string) {
   member.patch('/', groups.rename);
   member.post('/join-code', groups.rotate);
   member.get('/members', groups.members);
+  member.get('/activity', records.activity);
+  member.get('/statements', records.statement);
+  member.get('/categories', categories.list);
+  member.post('/categories', categories.create);
+  member.patch('/categories/:cid', categories.edit);
   member.get('/balances', groups.balances);
   member.get('/settle-up', groups.settleUp);
   member.post('/expenses', expenses.create);
   member.get('/expenses', expenses.list);
+  member.get('/expenses/:eid', expenses.detail);
   member.put('/expenses/:eid', expenses.edit);
   member.delete('/expenses/:eid', expenses.remove);
   member.post('/settlements', settlements.create);

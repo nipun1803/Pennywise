@@ -17,6 +17,9 @@ export const list: RequestHandler = async (req, res) => {
   const [expenses, total] = await Promise.all([Expense.find(filter).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(), Expense.countDocuments(filter)]);
   res.json({ data: expenses.map(expenseView), pagination: pageView(page, limit, total) });
 };
+export const detail: RequestHandler = async (req, res) => {
+  res.json({ data: expenseView(await ledger.getExpense(String(context(res).group._id), id.parse(req.params.eid))) });
+};
 export const edit: RequestHandler = async (req, res) => {
   const { group, userId } = context(res);
   res.json({ data: await ledger.editExpense(group, userId, id.parse(req.params.eid), parseExpense(req.body, true)) });

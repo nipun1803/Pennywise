@@ -1,6 +1,6 @@
 import type { RequestHandler } from 'express';
 import { User } from '../models';
-import { nameSchema } from '../validators';
+import { profileSchema } from '../validators';
 import { userView } from '../utils/serialize';
 import { ApiError } from '../utils/errors';
 
@@ -10,7 +10,7 @@ export const me: RequestHandler = async (_req, res) => {
   res.json({ data: userView(user) });
 };
 export const updateName: RequestHandler = async (req, res) => {
-  const input = nameSchema.parse(req.body);
+  const input = profileSchema.parse(req.body);
   const user = await User.findByIdAndUpdate(res.locals.userId, { $set: input }, { returnDocument: 'after', runValidators: true });
   if (!user) throw new ApiError(401, 'UNAUTHENTICATED', 'Account not found');
   res.json({ data: userView(user) });
