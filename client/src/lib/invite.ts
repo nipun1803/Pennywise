@@ -17,6 +17,6 @@ export function codeFromScan(data: string): string | null {
   const text = data.trim();
   if (isJoinCode(text)) return text.toUpperCase();
   const match = /[?&]code=([^&#\s]+)/i.exec(text);
-  const code = match ? decodeURIComponent(match[1]).toUpperCase() : '';
-  return isJoinCode(code) ? code : null;
+  if (!match) return null;
+  try { const code = decodeURIComponent(match[1]).toUpperCase(); return isJoinCode(code) ? code : null; } catch { return null; }
 }
