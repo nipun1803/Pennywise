@@ -1,7 +1,7 @@
 import { router } from 'expo-router';
 import { Pressable, View } from 'react-native';
 import { Avatar, Card, Empty, Header, Label, Notice, ResourceError, Screen, Skeletons, SummaryCard, styles } from '@/components/ui/app-ui';
-import { useDashboard } from '@/hooks/use-group-summaries';
+import { useDashboard } from '@/hooks/use-dashboard';
 import { formatAmount } from '@/lib/format';
 import { useApp } from '@/providers/app-provider';
 

@@ -19,8 +19,8 @@ export default function PaymentForm() {
       if (!sender[0] || !receiver[0]) throw new Error('Choose a sender and recipient.'); if (sender[0].id === receiver[0].id) throw new Error('Sender and recipient must be different people.');
       const amountCents = parseINR(amount);
       if (!confirmed && sid) { setWarning('Correct this external payment record? Balances already include the previous record; a correction may overpay or reverse a debt. No real transfer will be changed.'); return; }
-      const suggestion = suggestions.data?.find(payment => payment.fromUser === sender[0].id && payment.toUser === receiver[0].id)?.amountCents ?? 0;
-      if (!confirmed && !sid && (suggestions.data === undefined || amountCents > suggestion)) { setWarning(suggestions.data === undefined ? 'Suggested balances are unavailable. This payment may overpay or reverse a debt. Confirm the external payment record?' : `This exceeds the suggested payment (${formatINR(suggestion)}). It may reverse a debt. Record it anyway?`); return; }
+      const suggestion = suggestions.data?.find(payment => payment.fromUser === sender[0].id && payment.toUser === receiver[0].id)?.amountCents ?? 0; const unavailable = suggestions.data === undefined || suggestions.saved || suggestions.loading || !!suggestions.error;
+      if (!confirmed && !sid && (unavailable || amountCents > suggestion)) { setWarning(unavailable ? 'Suggested balances are unavailable. This payment may overpay or reverse a debt. Confirm the external payment record?' : `This exceeds the suggested payment (${formatINR(suggestion)}). It may reverse a debt. Record it anyway?`); return; }
       const result = await mutate<Settlement>(sid ? `/groups/${id}/settlements/${sid}` : `/groups/${id}/settlements`, sid ? 'PUT' : 'POST', { fromUser: sender[0].id, toUser: receiver[0].id, amountCents }, !sid); notify(`Payment ${sid ? 'corrected' : 'recorded'}—no money was transferred by Pennywise.`); setWarning(''); if (result.data) router.dismissTo({ pathname: '/group/[id]', params: { id } });
     } catch (error) { setError(errorMessage(error)); }
   };

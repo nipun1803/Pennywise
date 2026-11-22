@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { Pressable, View } from 'react-native';
 import { AvatarBadge, Brand, Button, GroupCard, Label, Notice, ResourceError, Screen, Skeletons, SummaryCard, styles } from '@/components/ui/app-ui';
-import { useDashboard } from '@/hooks/use-group-summaries';
+import { useDashboard } from '@/hooks/use-dashboard';
 import { formatAmount, greeting } from '@/lib/format';
 import { useApp } from '@/providers/app-provider';
 import { illustrations } from '@/theme/illustrations';
