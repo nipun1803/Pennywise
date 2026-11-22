@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const ts = require('typescript');
 
 function load(file, mocks = {}, globals = {}) {
+  mocks = { 'expo-constants': { default: {} }, ...mocks };
   const source = fs.readFileSync(path.join(__dirname, '../src', file), 'utf8');
   const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const exports = {};
@@ -77,6 +78,7 @@ function mutationHarness(request, offline = false) {
     'react': { useRef: value => ({ current: value }), useState: value => [value, () => undefined] },
     'expo': { uuid: { v4: () => `uuid-${++ids}` } },
     '@/lib/api': { ApiError, request },
+    '@/lib/storage': { cacheVersion: () => 0, readIntent: async () => null, writeIntent: async () => undefined, removeIntent: async () => undefined },
     '@/providers/app-provider': { useApp: () => ({ offline, invalidate: () => invalidations++ }) },
   });
   return { ...hooks.useMutation(), ApiError, invalidations: () => invalidations };
