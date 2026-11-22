@@ -17,7 +17,11 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "package": "com.nipun_appdev.pennywise"
     },
     "web": {
       "output": "server",
@@ -34,7 +38,13 @@
         }
       ],
       "expo-secure-store",
-      ["expo-image-picker", { "photosPermission": "Choose a profile or group photo for Pennywise.", "microphonePermission": false }],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose a profile or group photo for Pennywise.",
+          "microphonePermission": false
+        }
+      ],
       [
         "expo-camera",
         {
@@ -46,6 +56,16 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "02a9e42a-2c43-4a4a-bceb-918bc019c4fc"
+      }
     }
   }
 }
