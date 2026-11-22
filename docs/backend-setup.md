@@ -70,7 +70,7 @@ cp server/.env.docker.example server/.env.docker
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Put the generated value into `JWT_SECRET` in `server/.env.docker`. For local MongoDB use `mongodb://host.docker.internal:27017/pennywise`, **not `localhost`**, which refers to the container. Atlas users replace that URI with their Atlas connection string. The database must accept connections from Docker; on Linux a MongoDB bound only to loopback may need a carefully restricted bind/network configuration. Do not expose an unauthenticated database publicly.
+Put the generated value into `JWT_SECRET` in `server/.env.docker`. For local MongoDB use `mongodb://host.docker.internal:27017/pennywise`, **not `localhost`**, which refers to the container. Atlas users replace that URI with their Atlas connection string. Photo uploads also need `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET` in that file; they are optional, and without them `/media` returns 503 `MEDIA_UNAVAILABLE`. The database must accept connections from Docker; on Linux a MongoDB bound only to loopback may need a carefully restricted bind/network configuration. Do not expose an unauthenticated database publicly.
 
 ```bash
 docker compose --env-file server/.env.docker -f server/compose.yaml config --quiet

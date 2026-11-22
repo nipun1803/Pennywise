@@ -12,6 +12,10 @@ services:
       MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI using --env-file}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET using --env-file}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # Optional; without all three, photo uploads return 503 MEDIA_UNAVAILABLE.
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
     ports:
       - "${HOST_PORT:-3000}:3000"
     # Docker Desktop provides this hostname on macOS/Windows; also map Linux.

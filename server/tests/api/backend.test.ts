@@ -243,6 +243,19 @@ test('a member joining during a balance request cannot cause an invalid ledger e
   expect(balances.reduce((sum, b) => sum + b.balanceCents, 0)).toBe(0);
 });
 
+test('a member joining during a dashboard request is counted without an invalid ledger error', async () => {
+  const find = Expense.find.bind(Expense);
+  // Simulate the join and expense landing after the dashboard's group read but before its ledger read.
+  jest.spyOn(Expense, 'find').mockImplementationOnce(((filter: Record<string, unknown>) => ({ lean: async () => {
+    expect((await request(app).post('/groups/join').set('Authorization', auth(outsider.token)).send({ code })).status).toBe(200);
+    expect((await postExpense(randomUUID(), { ...expenseBody(), paidBy: outsider.id }, outsider.token)).status).toBe(201);
+    return find(filter).lean();
+  } })) as unknown as typeof Expense.find);
+  const dashboard = await request(app).get('/dashboard').set('Authorization', auth());
+  expect(dashboard.status).toBe(200);
+  expect(dashboard.body.data.summaries[groupId]).toMatchObject({ expenseCount: 1, spendingCents: 100, balanceCents: -25 });
+});
+
 test('simultaneous code rotations cannot both keep the same new code', async () => {
   await Group.updateOne({ _id: groupId }, { $set: { joinCode: 'CCCCCC' } });
   let calls = 0;

@@ -11,11 +11,14 @@ export const summary: RequestHandler = async (_req, res) => {
   const groups = await Group.find({ members: res.locals.userId }).sort({ createdAt: -1, _id: -1 }).lean();
   const ids = groups.map(g => g._id);
   const [expenses, payments] = await Promise.all([Expense.find({ groupId: { $in: ids }, deletedAt: null }).lean(), Settlement.find({ groupId: { $in: ids }, deletedAt: null }).lean()]);
+  // Membership only grows in this MVP. Reload it after both ledger reads so an
+  // expense by a member who joined after the group read is not a non-member.
+  const members = new Map((await Group.find({ _id: { $in: ids } }).select('members').lean()).map(g => [String(g._id), g.members]));
   const summaries: Record<string, { expenseCount: number; spendingCents: number; balanceCents: number }> = {};
   for (const group of groups) {
     const es = expenses.filter(e => String(e.groupId) === String(group._id)); const ps = payments.filter(p => String(p.groupId) === String(group._id));
     try {
-      const balances = computeBalances(group.members.map(String), es.map(e => ({ amountCents: e.amountCents, paidBy: String(e.paidBy), splits: e.splits.map(s => ({ userId: String(s.userId), shareCents: s.shareCents })) })), ps.map(p => ({ fromUser: String(p.fromUser), toUser: String(p.toUser), amountCents: p.amountCents })));
+      const balances = computeBalances((members.get(String(group._id)) ?? group.members).map(String), es.map(e => ({ amountCents: e.amountCents, paidBy: String(e.paidBy), splits: e.splits.map(s => ({ userId: String(s.userId), shareCents: s.shareCents })) })), ps.map(p => ({ fromUser: String(p.fromUser), toUser: String(p.toUser), amountCents: p.amountCents })));
       summaries[String(group._id)] = { expenseCount: es.length, spendingCents: safe(es.reduce((sum, e) => sum + BigInt(e.amountCents), 0n)), balanceCents: balances.find(b => b.userId === res.locals.userId)?.balanceCents ?? 0 };
     } catch (error) { if (error instanceof RangeError) throw new ApiError(422, 'BALANCE_OVERFLOW', 'Totals exceed safe integer cents'); throw error; }
   }

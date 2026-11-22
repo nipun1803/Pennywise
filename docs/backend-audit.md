@@ -23,7 +23,7 @@ A regression test compares documentation tables against route registrations and 
 | --- | --- | --- |
 | Backend stack | Express, TypeScript, MongoDB/Mongoose, JWT, bcrypt, Zod | Present; TypeScript build/typecheck and lint pass |
 | Accounts | Name/email/password signup; email/password login | API tests verify normalization, hashing, duplicate emails and generic login failures |
-| Passwords | Minimum 10 Unicode characters; bcrypt-safe byte length | Signup and login enforce the 72-byte boundary; truncation-regression test passes |
+| Passwords | Minimum 8 Unicode characters; bcrypt-safe byte length | Signup enforces the 8-character minimum; signup and login enforce the 72-byte boundary; truncation-regression test passes |
 | Sessions | Seven-day JWT; no refresh/reset/verification | HS256, subject, issuer, audience and expiry verification; invalid/expired/wrong-audience tokens tested |
 | Profile | Name and preset avatar/color | GET/PATCH `/me`; presets validated; email/password updates rejected |
 | Groups | Name, optional description/preset icon/color; creator becomes first member | Description length/presets and creator-only metadata changes tested; no capacity field or member input |
@@ -49,7 +49,7 @@ A regression test compares documentation tables against route registrations and 
 | Frontend/offline | Cached loaded-page reads; no offline writes; SecureStore token | Implemented; core tests cover storage/cache/session behavior; native-device verification still pending |
 | Activity | Embedded atomic events with actor/time/before/after, deleted records retained | Concurrent before-image chain and fault-injected audit failure atomicity tested; invite/credential leakage checked |
 | Statements | Corrected ledger at original dates; full-ledger running totals | Matches member balances; pagination opening totals, deleted exclusion, group spending and overflow tested |
-| Non-goals | No real payments, currency conversion, scanning, push, placeholders, social/OTP login | None added; no group leaving/archive/deletion or ownership-transfer APIs added |
+| Non-goals | No real payments, currency conversion, receipt scanning, push, placeholders, social/OTP login | None added; no group leaving/archive/deletion or ownership-transfer APIs added. The client's camera QR scanner only reads group join codes (`client/src/app/scan.tsx`); nothing is recorded or uploaded |
 
 ## Bugs reproduced and fixed
 
@@ -61,7 +61,7 @@ Each bug was reproduced by a failing regression test before applying the fix.
 
 ## Verification
 
-Frontend-extension check: **84 Jest tests passed across 3 suites** on an isolated standalone MongoDB; backend build/typecheck/lint pass. Earlier container verification covered the original 22 endpoints; re-run the expanded 28-endpoint script against a rebuilt image. Earlier dependency-audit results are not a guarantee about future advisories. Client checks and native-testing limits are described in [client setup](../client/README.md).
+*Historical results from the review on 2026-11-21; re-run the commands below for current status.* Frontend-extension check at that time: **84 Jest tests passed across 3 suites** on an isolated standalone MongoDB; backend build/typecheck/lint pass. Earlier container verification covered the original 22 endpoints; re-run the expanded 28-endpoint script against a rebuilt image. Earlier dependency-audit results are not a guarantee about future advisories. Client checks and native-testing limits are described in [client setup](../client/README.md).
 
 Run from `server/`:
 
@@ -86,7 +86,7 @@ Container testing uses an isolated host-side standalone MongoDB and a uniquely n
 - Full-ledger reads are not a cross-collection transaction snapshot during simultaneous edits. Counts/pages may shift; independent corrections remain last-write-wins as documented. No running totals are stored.
 - Full version-by-version activity begins with this rollout; older actions cannot be reconstructed. Any-member payment corrections are intentional and require group trust; the backend does not verify actual money transfers.
 - Tombstones and original creation responses are retained indefinitely for idempotency. Large groups/ledgers remain subject to document, request-size, memory and CPU limits; no large production-load benchmark was performed.
-- Production npm dependencies report zero current advisories. The Jest development dependency tree still reports moderate glob/minimatch advisories; no forced breaking dependency update was applied. This does not constitute an OS-container vulnerability scan.
+- At the time of review (2026-11-19), production npm dependencies reported zero advisories; re-run `npm audit --omit=dev` for current results. The Jest development dependency tree then reported moderate glob/minimatch advisories; no forced breaking dependency update was applied. This does not constitute an OS-container vulnerability scan.
 - Docker was built/run on this Apple Silicon machine. Other architectures and live Atlas/hosting environments were not exercised. No paid resource or live deployment was created.
 - The client is implemented, but compilation/web checks do not prove Android/iOS keyboard, safe-area, SecureStore, clipboard, share-sheet, or connectivity behavior. Test development builds on actual devices before release.
 - Embedded audit arrays are retained with the action document, not a separate transaction-dependent collection. Monitor MongoDB's 16 MiB document limit; full histories are not silently pruned. There has been no large-scale load benchmark.
