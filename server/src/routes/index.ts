@@ -1,54 +1,33 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { authenticate } from '../middleware/auth';
 import { requireMembership } from '../middleware/membership';
-import * as auth from '../controllers/auth';
-import * as users from '../controllers/users';
-import * as groups from '../controllers/groups';
-import * as expenses from '../controllers/expenses';
-import * as settlements from '../controllers/settlements';
-import * as categories from '../controllers/categories';
-import * as records from '../controllers/records';
-import * as dashboard from '../controllers/dashboard';
-import * as media from '../controllers/media';
-import express from 'express';
+import { authRoutes } from './auth';
+import { userRoutes } from './users';
+import { mediaRoutes } from './media';
+import { dashboardRoutes } from './dashboard';
+import { groupRoutes, groupMemberRoutes } from './groups';
+import { recordRoutes } from './records';
+import { categoryRoutes } from './categories';
+import { expenseRoutes } from './expenses';
+import { settlementRoutes } from './settlements';
 
-export function apiRoutes(secret: string) {
+export function apiRoutes(secret: string, joinLimiter?: RequestHandler) {
   const router = Router();
-  router.post('/auth/signup', auth.signup(secret));
-  router.post('/auth/login', auth.login(secret));
+  router.use('/auth', authRoutes(secret));
+  // Everything below requires a valid bearer token.
   router.use(authenticate(secret));
-  router.post('/media/images', express.json({ limit: '7mb' }), media.upload);
-  router.get('/dashboard', dashboard.summary);
-  router.get('/activity', dashboard.activity);
-  router.get('/me', users.me);
-  router.patch('/me', users.updateName);
-  router.patch('/me/notifications', users.updateNotifications);
-  router.put('/me/push-token', users.registerPushToken);
-  router.delete('/me/push-token', users.removePushToken);
-  router.post('/groups', groups.create);
-  router.get('/groups', groups.list);
-  router.post('/groups/join', groups.join);
+  router.use('/media', mediaRoutes());
+  router.use('/me', userRoutes());
+  router.use(dashboardRoutes());
+  // Mounted before '/groups/:id' so POST /groups/join is not read as a group id.
+  if (joinLimiter) router.use('/groups/join', (req, res, next) => req.method === 'POST' ? joinLimiter(req, res, next) : next());
+  router.use('/groups', groupRoutes());
   const member = Router({ mergeParams: true });
   router.use('/groups/:id', requireMembership, member);
-  member.get('/', groups.detail);
-  member.patch('/', groups.rename);
-  member.post('/join-code', groups.rotate);
-  member.get('/members', groups.members);
-  member.get('/activity', records.activity);
-  member.get('/statements', records.statement);
-  member.get('/categories', categories.list);
-  member.post('/categories', categories.create);
-  member.patch('/categories/:cid', categories.edit);
-  member.get('/balances', groups.balances);
-  member.get('/settle-up', groups.settleUp);
-  member.post('/expenses', expenses.create);
-  member.get('/expenses', expenses.list);
-  member.get('/expenses/:eid', expenses.detail);
-  member.put('/expenses/:eid', expenses.edit);
-  member.delete('/expenses/:eid', expenses.remove);
-  member.post('/settlements', settlements.create);
-  member.get('/settlements', settlements.list);
-  member.put('/settlements/:sid', settlements.edit);
-  member.delete('/settlements/:sid', settlements.remove);
+  member.use(groupMemberRoutes());
+  member.use(recordRoutes());
+  member.use('/categories', categoryRoutes());
+  member.use('/expenses', expenseRoutes());
+  member.use('/settlements', settlementRoutes());
   return router;
 }
