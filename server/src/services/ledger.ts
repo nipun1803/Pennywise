@@ -7,6 +7,7 @@ import { expenseView, settlementView } from '../utils/serialize';
 import { createOnce, fingerprint } from './idempotency';
 import { expenseCategory } from './categories';
 import { auditedUpdate, auditEvent } from './audit';
+import { notifyExpense, notifyPayment } from './notifications';
 
 export function checkMembers(group: GroupRecord, ids: readonly string[]) {
   const members = new Set(group.members.map(String));
@@ -35,6 +36,7 @@ export async function createExpense(group: GroupRecord, userId: string, key: str
     record.auditEvents = [await auditEvent(userId, 'expense.created', null, response.data)];
     record.creationResponse = response;
     await record.save({ timestamps: false });
+    notifyExpense('created', group, userId, response.data);
     return response;
   });
 }
@@ -55,7 +57,9 @@ export async function editExpense(group: GroupRecord, userId: string, expenseId:
     return { updates: { ...fields, updatedBy: userId }, before: expenseView(before), after: expenseView({ ...before, ...fields }) };
   });
   if (!updated) throw new ApiError(404, 'NOT_FOUND', 'Expense not found');
-  return expenseView(updated);
+  const view = expenseView(updated);
+  notifyExpense('updated', group, userId, view, expenseView(existing));
+  return view;
 }
 export async function deleteExpense(group: GroupRecord, userId: string, expenseId: string) {
   const expense = await getExpense(String(group._id), expenseId, true);
@@ -64,6 +68,7 @@ export async function deleteExpense(group: GroupRecord, userId: string, expenseI
     checkExpensePermission(group, userId, before);
     return before.deletedAt ? null : { updates: { deletedAt: new Date(), deletedBy: userId, updatedBy: userId }, before: expenseView(before), after: null };
   });
+  if (!expense.deletedAt) notifyExpense('deleted', group, userId, expenseView(expense));
 }
 export async function createSettlement(group: GroupRecord, userId: string, key: string, input: { fromUser: string; toUser: string; amountCents: number }) {
   return createOnce('settlement', { groupId: String(group._id), userId, key, hash: fingerprint(input) }, async () => {
@@ -75,21 +80,27 @@ export async function createSettlement(group: GroupRecord, userId: string, key: 
     record.auditEvents = [await auditEvent(userId, 'payment.created', null, response.data)];
     record.creationResponse = response;
     await record.save({ timestamps: false });
+    notifyPayment('created', group, userId, response.data);
     return response;
   });
 }
 export async function editSettlement(group: GroupRecord, userId: string, settlementId: string, input: { fromUser: string; toUser: string; amountCents: number }) {
   checkMembers(group, [input.fromUser, input.toUser]);
-  const updated = await auditedUpdate(Settlement, { _id: settlementId, groupId: group._id, deletedAt: null }, userId, 'payment.updated', before => ({
-    updates: { ...input, updatedBy: userId }, before: settlementView(before), after: { ...settlementView(before), ...input },
-  }));
+  let previous: ReturnType<typeof settlementView> | undefined;
+  const updated = await auditedUpdate(Settlement, { _id: settlementId, groupId: group._id, deletedAt: null }, userId, 'payment.updated', before => {
+    previous = settlementView(before);
+    return { updates: { ...input, updatedBy: userId }, before: previous, after: { ...previous, ...input } };
+  });
   if (!updated) throw new ApiError(404, 'NOT_FOUND', 'Settlement not found');
-  return settlementView(updated);
+  const view = settlementView(updated);
+  notifyPayment('updated', group, userId, view, previous);
+  return view;
 }
 export async function deleteSettlement(group: GroupRecord, userId: string, settlementId: string) {
   const existing = await Settlement.findOne({ _id: settlementId, groupId: group._id }).lean();
   if (!existing) throw new ApiError(404, 'NOT_FOUND', 'Settlement not found');
   await auditedUpdate(Settlement, { _id: settlementId, groupId: group._id }, userId, 'payment.deleted', before => before.deletedAt ? null : { updates: { deletedAt: new Date(), deletedBy: userId, updatedBy: userId }, before: settlementView(before), after: null });
+  if (!existing.deletedAt) notifyPayment('deleted', group, userId, settlementView(existing));
 }
 export async function balancesFor(group: GroupRecord) {
   const [expenses, settlements] = await Promise.all([

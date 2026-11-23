@@ -8,6 +8,7 @@ import { createApp } from '../../src/app';
 import { User, Group, Expense, Settlement, Category, ensureIndexes } from '../../src/models';
 import { TOKEN_OPTIONS } from '../../src/middleware/auth';
 import { balancesFor } from '../../src/services/ledger';
+import { flushNotifications, setPushSender, type PushMessage, type PushTicket } from '../../src/services/notifications';
 
 const secret = 'pennywise-isolated-test-secret-32-characters';
 const app = createApp({ jwtSecret: secret, corsOrigins: ['http://localhost:8081'] });
@@ -133,6 +134,24 @@ test('member search is paginated, literal, and hides email', async () => {
   expect(result.body.data[0]).not.toHaveProperty('email');
   expect((await request(app).get(`/groups/${groupId}/members?search=.*`).set('Authorization', auth())).body.data).toEqual([]);
   expect((await request(app).get(`/groups/${groupId}/members?limit=101`).set('Authorization', auth())).status).toBe(400);
+});
+test('only the creator can set, replace, or remove a group photo/preset', async () => {
+  const path = `/groups/${groupId}`;
+  expect((await request(app).patch(path).set('Authorization', auth()).send({ image: 'preset:heart' })).body.data.image).toBe('preset:heart');
+  expect((await request(app).get(path).set('Authorization', auth(charlie.token))).body.data.image).toBe('preset:heart');
+  for (const token of [bob.token, charlie.token]) {
+    for (const image of ['preset:people', null]) {
+      const rejected = await request(app).patch(path).set('Authorization', auth(token)).send({ image });
+      expect(rejected.status).toBe(403); expect(rejected.body.error.code).toBe('FORBIDDEN');
+    }
+  }
+  for (const field of [{ name: 'Changed' }, { description: 'Changed' }, { color: 'rose' }, { icon: 'home' }]) {
+    expect((await request(app).patch(path).set('Authorization', auth(bob.token)).send({ image: null, ...field })).status).toBe(403);
+  }
+  expect((await request(app).patch(path).set('Authorization', auth(outsider.token)).send({ image: null })).status).toBe(403);
+  expect((await request(app).patch(path).set('Authorization', auth(bob.token)).send({ image: 'https://example.com/photo.jpg' })).status).toBe(403);
+  expect((await request(app).get(path).set('Authorization', auth())).body.data).toMatchObject({ image: 'preset:heart', name: 'Weekend trip' });
+  expect((await request(app).patch(path).set('Authorization', auth()).send({ image: null })).body.data.image).toBeNull();
 });
 test('equal splits are server-calculated and all-mode snapshots membership', async () => {
   const result = await postExpense();
@@ -596,6 +615,21 @@ test('photo uploads are signed server-side and return the provider URL without c
     const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2G3sAAAAASUVORK5CYII=';
     const uploaded = await request(app).post('/media/images').set('Authorization', auth()).send({ image });
     expect(uploaded.status).toBe(201); expect(uploaded.body).toEqual({ data: { image: url } });
+    expect((await request(app).patch('/me').set('Authorization', auth()).send({ image: url })).body.data.image).toBe(url);
+    const members = await request(app).get(`/groups/${groupId}/members`).set('Authorization', auth(bob.token));
+    expect(members.body.data.find((member: { id: string }) => member.id === alice.id)).toMatchObject({ image: url });
+    expect(JSON.stringify(members.body)).not.toContain('alice@example.com');
+    const balances = await request(app).get(`/groups/${groupId}/balances`).set('Authorization', auth(bob.token));
+    expect(balances.body.data.find((member: { userId: string }) => member.userId === alice.id).image).toBe(url);
+    expect((await request(app).post('/media/images').set('Authorization', auth(bob.token)).send({ image })).status).toBe(201);
+    expect((await request(app).patch('/me').set('Authorization', auth(bob.token)).send({ image: url })).body.data.image).toBe(url);
+    expect((await request(app).patch(`/groups/${groupId}`).set('Authorization', auth(bob.token)).send({ image: url })).status).toBe(403);
+    expect((await request(app).get(`/groups/${groupId}`).set('Authorization', auth())).body.data.image).toBeNull();
+    expect((await request(app).patch(`/groups/${groupId}`).set('Authorization', auth()).send({ image: url })).body.data.image).toBe(url);
+    expect((await request(app).patch(`/groups/${groupId}`).set('Authorization', auth(bob.token)).send({ image: null })).status).toBe(403);
+    expect((await request(app).get('/dashboard').set('Authorization', auth(charlie.token))).body.data.groups[0].image).toBe(url);
+    expect((await request(app).post('/groups').set('Authorization', auth()).send({ name: 'Photo group', image: url })).body.data.image).toBe(url);
+    await request(app).patch('/me').set('Authorization', auth()).send({ image: null });
     const form = remote.mock.calls[0]![1]!.body as FormData;
     const publicId = form.get('public_id'); const timestamp = form.get('timestamp');
     expect(publicId).toEqual(expect.stringContaining(`pennywise/${alice.id}/`));
@@ -607,4 +641,119 @@ test('photo uploads are signed server-side and return the provider URL without c
     remote.mockRestore();
     ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'].forEach((key, i) => { if (previous[i] === undefined) delete process.env[key]; else process.env[key] = previous[i]; });
   }
+});
+
+describe('push notifications', () => {
+  const device = (user: { id: string }) => `ExponentPushToken[${user.id}]`;
+  let sent: PushMessage[];
+  let tickets: (message: PushMessage) => PushTicket;
+  const register = (user: { id: string; token: string }, token = device(user)) => request(app).put('/me/push-token').set('Authorization', auth(user.token)).send({ token });
+  const pushed = async () => { await flushNotifications(); return sent; };
+  beforeEach(async () => {
+    sent = []; tickets = () => ({ status: 'ok' });
+    setPushSender(async messages => { sent.push(...messages); return messages.map(tickets); });
+    await User.updateMany({}, { $set: { pushTokens: [], notifications: { expenses: true, payments: true, members: true } } });
+    for (const user of [alice, bob, charlie]) expect((await register(user)).status).toBe(204);
+  });
+  afterAll(() => setPushSender(null));
+
+  test('device tokens are validated, moved to the latest account, and removable', async () => {
+    expect((await register(alice, 'not-a-token')).status).toBe(400);
+    expect((await request(app).put('/me/push-token').send({ token: device(bob) })).status).toBe(401);
+    expect((await register(outsider, device(alice))).status).toBe(204);
+    expect((await User.findById(alice.id).select('+pushTokens'))!.pushTokens).not.toContain(device(alice));
+    expect((await User.findById(outsider.id).select('+pushTokens'))!.pushTokens).toEqual([device(alice)]);
+    expect((await register(outsider, device(alice))).status).toBe(204);
+    expect((await User.findById(outsider.id).select('+pushTokens'))!.pushTokens).toEqual([device(alice)]);
+    const removed = await request(app).delete('/me/push-token').set('Authorization', auth(outsider.token)).send({ token: device(alice) });
+    expect(removed.status).toBe(204);
+    expect((await User.findById(outsider.id).select('+pushTokens'))!.pushTokens).toEqual([]);
+    const profile = await request(app).get('/me').set('Authorization', auth());
+    expect(profile.body.data).not.toHaveProperty('pushTokens');
+  });
+  test('notification preferences default on, merge per type, and reject empty updates', async () => {
+    const fresh = await request(app).get('/me').set('Authorization', auth(outsider.token));
+    expect(fresh.body.data.notifications).toEqual({ expenses: true, payments: true, members: true });
+    const patch = (body: object) => request(app).patch('/me/notifications').set('Authorization', auth(bob.token)).send(body);
+    expect((await patch({ payments: false })).body.data.notifications).toEqual({ expenses: true, payments: false, members: true });
+    expect((await patch({ members: false })).body.data.notifications).toEqual({ expenses: true, payments: false, members: false });
+    expect((await patch({})).status).toBe(400);
+    expect((await patch({ expenses: 'no' })).status).toBe(400);
+    expect((await patch({ unknown: true })).status).toBe(400);
+  });
+  test('a new expense notifies other participants once, honours their mute setting, and not on replay', async () => {
+    await request(app).patch('/me/notifications').set('Authorization', auth(charlie.token)).send({ expenses: false });
+    const key = randomUUID();
+    const body = { description: 'Dinner', amountCents: 30000, paidBy: alice.id, splitMode: 'all', categoryId: 'food' };
+    expect((await postExpense(key, body)).status).toBe(201);
+    const messages = await pushed();
+    expect(messages.map(m => m.to)).toEqual([device(bob)]);
+    expect(messages[0]).toMatchObject({ title: 'Alice added “Dinner”', body: 'Weekend trip · Your share: ₹100', data: { type: 'expense', groupId } });
+    expect((await postExpense(key, body)).status).toBe(201);
+    expect(await pushed()).toHaveLength(1);
+  });
+  test('payer and removed members hear about edits and deletes; the actor never does', async () => {
+    const created = await postExpense(randomUUID(), { description: 'Taxi', amountCents: 9000, paidBy: bob.id, splitMode: 'all', categoryId: 'food' }, bob.token);
+    await flushNotifications(); sent.length = 0;
+    const eid = created.body.data.id;
+    const edit = await request(app).put(`/groups/${groupId}/expenses/${eid}`).set('Authorization', auth(bob.token))
+      .send({ description: 'Taxi', amountCents: 9000, paidBy: bob.id, splitMode: 'selected', splitUserIds: [bob.id, alice.id] });
+    expect(edit.status).toBe(200);
+    const byUser = new Map((await pushed()).map(m => [m.to, m]));
+    expect([...byUser.keys()].sort()).toEqual([device(alice), device(charlie)].sort());
+    expect(byUser.get(device(alice))!.title).toBe('Bob edited “Taxi”');
+    expect(byUser.get(device(alice))!.body).toBe('Weekend trip · Your share: ₹45');
+    expect(byUser.get(device(charlie))!.body).toBe('Weekend trip · You were removed from this expense');
+    sent.length = 0;
+    expect((await request(app).delete(`/groups/${groupId}/expenses/${eid}`).set('Authorization', auth(bob.token))).status).toBe(204);
+    const afterDelete = await pushed();
+    expect(afterDelete.map(m => m.to).sort()).toEqual([device(alice)]);
+    expect(afterDelete[0]!.title).toBe('Bob deleted “Taxi”');
+    sent.length = 0;
+    expect((await request(app).delete(`/groups/${groupId}/expenses/${eid}`).set('Authorization', auth(bob.token))).status).toBe(204);
+    expect(await pushed()).toHaveLength(0);
+  });
+  test('payments notify only the other party and respect the payments setting', async () => {
+    const payment = await postPayment(randomUUID(), { fromUser: bob.id, toUser: alice.id, amountCents: 2550 }, bob.token);
+    expect(payment.status).toBe(201);
+    let messages = await pushed();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ to: device(alice), title: 'Bob paid you ₹25.50', body: 'Weekend trip', data: { type: 'payment', groupId } });
+    sent.length = 0;
+    const recorded = await postPayment(randomUUID(), { fromUser: bob.id, toUser: charlie.id, amountCents: 1000 }, alice.token);
+    expect(recorded.status).toBe(201);
+    messages = await pushed();
+    expect(messages.map(m => m.to).sort()).toEqual([device(bob), device(charlie)].sort());
+    expect(messages.find(m => m.to === device(bob))!.title).toBe('Alice recorded your ₹10 payment to Charlie');
+    sent.length = 0;
+    await request(app).patch('/me/notifications').set('Authorization', auth(alice.token)).send({ payments: false });
+    await postPayment(randomUUID(), { fromUser: bob.id, toUser: alice.id, amountCents: 100 }, bob.token);
+    expect(await pushed()).toHaveLength(0);
+    const edit = await request(app).put(`/groups/${groupId}/settlements/${payment.body.data.id}`).set('Authorization', auth(alice.token)).send({ fromUser: bob.id, toUser: alice.id, amountCents: 3000 });
+    expect(edit.status).toBe(200);
+    expect((await pushed()).map(m => [m.to, m.title])).toEqual([[device(bob), 'Alice updated a ₹30 payment']]);
+  });
+  test('joining a group notifies existing members but not the joiner or a repeat join', async () => {
+    await register(outsider);
+    expect((await request(app).post('/groups/join').set('Authorization', auth(outsider.token)).send({ code })).status).toBe(200);
+    const messages = await pushed();
+    expect(messages.map(m => m.to).sort()).toEqual([device(alice), device(bob), device(charlie)].sort());
+    expect(messages[0]).toMatchObject({ title: 'Outsider joined Weekend trip', body: '4 members', data: { type: 'member', groupId } });
+    sent.length = 0;
+    expect((await request(app).post('/groups/join').set('Authorization', auth(outsider.token)).send({ code })).body.alreadyMember).toBe(true);
+    expect(await pushed()).toHaveLength(0);
+  });
+  test('tokens reported as unregistered are pruned, and a failing push service never fails the request', async () => {
+    tickets = message => message.to === device(bob) ? { status: 'error', details: { error: 'DeviceNotRegistered' } } : { status: 'ok' };
+    expect((await postExpense()).status).toBe(201);
+    await flushNotifications();
+    expect((await User.findById(bob.id).select('+pushTokens'))!.pushTokens).toEqual([]);
+    expect((await User.findById(charlie.id).select('+pushTokens'))!.pushTokens).toEqual([device(charlie)]);
+    const failure = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    setPushSender(async () => { throw new Error('Expo is down'); });
+    expect((await postExpense()).status).toBe(201);
+    await flushNotifications();
+    expect(failure).toHaveBeenCalledWith('Push notification failed:', 'Expo is down');
+    failure.mockRestore();
+  });
 });

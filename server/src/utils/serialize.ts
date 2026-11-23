@@ -1,6 +1,7 @@
 import type { UserRecord, GroupRecord, ExpenseRecord, SettlementRecord } from '../models';
 
-export const userView = (u: UserRecord) => ({ image: u.image ?? null, id: String(u._id), name: u.name, email: u.email, createdAt: u.createdAt.toISOString(), avatar: u.avatar ?? 'initials', avatarColor: u.avatarColor ?? 'emerald' });
+export const userView = (u: UserRecord) => ({ image: u.image ?? null, id: String(u._id), name: u.name, email: u.email, createdAt: u.createdAt.toISOString(), avatar: u.avatar ?? 'initials', avatarColor: u.avatarColor ?? 'emerald',
+  notifications: { expenses: u.notifications?.expenses ?? true, payments: u.notifications?.payments ?? true, members: u.notifications?.members ?? true } });
 export const groupView = (g: GroupRecord) => ({
   image: g.image ?? null,
   id: String(g._id), name: g.name, joinCode: g.joinCode, createdBy: String(g.createdBy),

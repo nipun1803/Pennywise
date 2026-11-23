@@ -18,9 +18,9 @@ const expenseInput = {
   excludedUserIds: { ...array(objectId), minItems: 1, uniqueItems: true }, customSplits: { ...array(share), minItems: 1 },
 };
 const schemas = {
-  User: object({ id: objectId, name, email: { type: 'string', format: 'email' }, createdAt: date, image, avatar: { type: 'string', enum: ['initials', 'leaf', 'sun', 'sparkles', 'coffee'] }, avatarColor: accent }),
+  User: object({ id: objectId, name, email: { type: 'string', format: 'email' }, createdAt: date, image, avatar: { type: 'string', enum: ['initials', 'leaf', 'sun', 'sparkles', 'coffee'] }, avatarColor: accent, notifications: object({ expenses: { type: 'boolean' }, payments: { type: 'boolean' }, members: { type: 'boolean' } }) }),
   Group: object({ id: objectId, ...metadata, joinCode: string, createdBy: objectId, memberCount: { type: 'integer' }, createdAt: date }),
-  Member: object({ id: objectId, name }),
+  Member: object({ id: objectId, name, image }),
   Category: object({ id: string, name, icon: string, color: accent, standard: { type: 'boolean' }, archivedAt: { type: ['string', 'null'], format: 'date-time' } }),
   Expense: object({ id: objectId, groupId: objectId, description: string, amountCents: money, paidBy: objectId, splits: array(share), category: { anyOf: [ref('Category'), { type: 'null' }] }, createdBy: objectId, createdAt: date, updatedAt: date }),
   Settlement: object({ id: objectId, groupId: objectId, fromUser: objectId, toUser: objectId, amountCents: money, createdBy: objectId, createdAt: date, updatedAt: date, updatedBy: { type: ['string', 'null'] }, deletedAt: { type: ['string', 'null'], format: 'date-time' }, deletedBy: { type: ['string', 'null'] } }),
@@ -28,10 +28,11 @@ const schemas = {
   ExpenseCreate: { ...input(expenseInput, ['description', 'amountCents', 'paidBy', 'categoryId', 'splitMode']), description: 'selected requires splitUserIds; allExcept requires excludedUserIds; custom requires unique member customSplits whose shares sum exactly to amountCents. Do not send irrelevant split fields.' },
   ExpenseEdit: { ...input(expenseInput, ['description', 'amountCents', 'paidBy']), description: 'Same split-mode rules as creation. Omitted mode keeps the original people and splits equally; use explicit custom amounts to retain unequal shares.' },
   CategoryInput: input({ name, icon: { type: 'string', enum: ['food', 'cart', 'bus', 'home', 'bulb', 'bag', 'game', 'airplane', 'heart', 'grid'] }, color: accent }, ['name']),
+  PushToken: input({ token: { type: 'string', pattern: '^Expo(nent)?PushToken\\[[\\w-]{1,100}\\]$', example: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]' } }, ['token']),
   Signup: input({ name, email: { type: 'string', format: 'email', maxLength: 254 }, password: { type: 'string', minLength: 8, format: 'password', description: 'Minimum 8 Unicode characters; maximum 72 UTF-8 bytes.' } }, ['name', 'email', 'password']),
   Login: input({ email: { type: 'string', format: 'email' }, password: { type: 'string', minLength: 1, format: 'password', description: 'Maximum 72 UTF-8 bytes. Not trimmed; signup policy is not reapplied.' } }, ['email', 'password']),
   Session: object({ token: string, user: ref('User') }),
-  Balance: object({ userId: objectId, name, balanceCents: { type: 'integer', description: 'Positive: owed to member. Negative: member owes.' } }),
+  Balance: object({ userId: objectId, name, image, balanceCents: { type: 'integer', description: 'Positive: owed to member. Negative: member owes.' } }),
   Suggestion: object({ fromUser: objectId, toUser: objectId, amountCents: money }),
   Pagination: object({ page: { type: 'integer' }, limit: { type: 'integer' }, total: { type: 'integer' }, totalPages: { type: 'integer' } }),
   Error: object({ error: object({ code: string, message: string }, ['code', 'message']) }, ['error']),
@@ -61,6 +62,9 @@ add('post', '/auth/signup', 'Authentication', 'Create account', ref('Session'), 
 add('post', '/auth/login', 'Authentication', 'Sign in', ref('Session'), { public: true, body: ref('Login') });
 add('get', '/me', 'Profile', 'Read your profile', ref('User'));
 add('patch', '/me', 'Profile', 'Update profile (at least one field)', ref('User'), { body: input({ name, image, avatar: schemas.User.properties.avatar, avatarColor: accent }), description: 'Email/password changes are not accepted.' });
+add('patch', '/me/notifications', 'Profile', 'Choose which push notifications you receive', ref('User'), { body: input({ expenses: { type: 'boolean' }, payments: { type: 'boolean' }, members: { type: 'boolean' } }), description: 'At least one field. All types default to on.' });
+add('put', '/me/push-token', 'Profile', 'Register this device for push notifications', {}, { status: 204, body: ref('PushToken'), description: 'Moves the token off any other account that registered it. A user keeps at most 10 tokens.' });
+add('delete', '/me/push-token', 'Profile', 'Stop push notifications on this device', {}, { status: 204, body: ref('PushToken') });
 add('post', '/media/images', 'Photos', 'Upload a profile or group photo', object({ image: string }), { status: 201, body: input({ image: { type: 'string', maxLength: 7_000_000, pattern: '^data:image/(jpeg|png|webp);base64,', description: 'Base64 data URI; decoded image must be <=5 MB.' } }, ['image']), description: 'Server-only Cloudinary credentials required. Five attempts per user/minute/process. Public image URLs; no sensitive uploads. Replacing a reference does not delete the old asset.' });
 add('get', '/dashboard', 'Overview', 'All your groups, full spending and balances', ref('Dashboard'));
 add('get', '/activity', 'Overview', 'Globally paginated expense/payment audit feed', array(ref('GlobalActivity')), { paginated: true, parameters: [query('kind', { type: 'string', enum: ['all', 'expenses', 'payments'], default: 'all' })] });
@@ -68,7 +72,7 @@ add('get', '/groups', 'Groups', 'List your groups', array(ref('Group')), { pagin
 add('post', '/groups', 'Groups', 'Create a group', ref('Group'), { status: 201, body: input(metadata, ['name']), description: 'Not idempotent. Check your groups after a lost response before retrying.' });
 add('post', '/groups/join', 'Groups', 'Join by invite code', ref('Group'), { body: input({ code: { type: 'string', minLength: 1, maxLength: 64, example: 'K7M2QX' } }, ['code']) });
 add('get', '/groups/{id}', 'Groups', 'Read a group (member only)', ref('Group'));
-add('patch', '/groups/{id}', 'Groups', 'Edit a group (creator only)', ref('Group'), { body: input(metadata), description: 'At least one field required.' });
+add('patch', '/groups/{id}', 'Groups', 'Edit a group (creator only)', ref('Group'), { body: input(metadata), description: 'At least one field required. All changes, including setting/removing a photo or preset avatar, require the group creator.' });
 add('post', '/groups/{id}/join-code', 'Groups', 'Regenerate invite code (creator only)', object({ joinCode: string }), { description: 'Invalidates existing code/QR; existing members remain.' });
 add('get', '/groups/{id}/members', 'Groups', 'Search group members without exposing emails', array(ref('Member')), { paginated: true, parameters: [search] });
 add('get', '/groups/{id}/balances', 'Ledger', 'Full non-deleted member balances', array(ref('Balance')));

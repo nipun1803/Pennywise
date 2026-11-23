@@ -22,6 +22,9 @@ export function apiRoutes(secret: string) {
   router.get('/activity', dashboard.activity);
   router.get('/me', users.me);
   router.patch('/me', users.updateName);
+  router.patch('/me/notifications', users.updateNotifications);
+  router.put('/me/push-token', users.registerPushToken);
+  router.delete('/me/push-token', users.removePushToken);
   router.post('/groups', groups.create);
   router.get('/groups', groups.list);
   router.post('/groups/join', groups.join);

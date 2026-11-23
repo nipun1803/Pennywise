@@ -3,7 +3,10 @@ import { Schema, model, type Types } from 'mongoose';
 export interface UserRecord {
   _id: Types.ObjectId; name: string; email: string; passwordHash: string; createdAt: Date;
   avatar?: string; avatarColor?: string; image?: string | null;
+  pushTokens?: string[]; notifications?: Partial<Record<NotificationKind, boolean>>;
 }
+export const NOTIFICATION_KINDS = ['expenses', 'payments', 'members'] as const;
+export type NotificationKind = typeof NOTIFICATION_KINDS[number];
 export interface GroupRecord {
   _id: Types.ObjectId; name: string; joinCode: string; createdBy: Types.ObjectId;
   members: Types.ObjectId[]; createdAt: Date;
@@ -54,7 +57,11 @@ const userSchema = new Schema<UserRecord>({
   passwordHash: { type: String, required: true, select: false },
   avatar: { type: String, enum: ['initials', 'leaf', 'sun', 'sparkles', 'coffee'], default: 'initials' },
   avatarColor: { type: String, enum: ['emerald', 'blue', 'amber', 'violet', 'rose'], default: 'emerald' },
+  // Expo push tokens, one per signed-in device. Never serialized to clients.
+  pushTokens: { type: [String], default: [], select: false },
+  notifications: Object.fromEntries(NOTIFICATION_KINDS.map(kind => [kind, { type: Boolean, default: true }])),
 }, { timestamps: { createdAt: true, updatedAt: false } });
+userSchema.index({ pushTokens: 1 });
 const groupSchema = new Schema<GroupRecord>({
   image: { type: String, default: null },
   auditEvents: auditField,

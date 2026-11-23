@@ -144,6 +144,9 @@ Both User and Group responses include `image`: `null` (initials), `preset:people
 | POST | `/auth/login` | Public | `email`, `password` | 200 — `data: { token, user }` |
 | GET | `/me` | JWT | None | 200 — `data: User` |
 | PATCH | `/me` | JWT | Any of `name`, `avatar`, `avatarColor` | 200 — `data: User` |
+| PATCH | `/me/notifications` | JWT | Any of `expenses`, `payments`, `members` (booleans) | 200 — `data: User` |
+| PUT | `/me/push-token` | JWT | `token` (Expo push token) | 204 |
+| DELETE | `/me/push-token` | JWT | `token` (Expo push token) | 204 |
 
 ### POST /auth/signup
 
@@ -183,6 +186,18 @@ Request:
 Response **200**: the same `{ "data": { "token": "<JWT>", "user": <User> } }` shape as signup. Missing account and wrong password both return **401 INVALID_CREDENTIALS**, `"Invalid email or password"`.
 
 JWTs use HS256, subject=user ID, issuer=`pennywise`, audience=`pennywise-app`, and a seven-day lifetime. There are no refresh tokens, email verification, password reset, or logout endpoint. Client logout clears the token/cache; an issued token remains valid until expiry.
+
+### Push notifications
+
+Pushes are sent through the Expo push service (backed by Firebase Cloud Messaging on Android) after a write succeeds; a failed push never fails the request. The acting user is never notified of their own action.
+
+| Type (`notifications.*`) | Sent to | When |
+| --- | --- | --- |
+| `expenses` | Payer and everyone in the split (including members removed by an edit) | Expense added, edited or deleted |
+| `payments` | The sender and receiver of the payment | Payment added, edited or deleted |
+| `members` | Every other group member | Someone joins via invite code |
+
+Each push carries `data: { type, groupId }` so the app can open the group. Idempotent replays of a create do not notify twice. `PUT /me/push-token` moves a token off any other account, so a shared device only alerts whoever signed in last. Set `EXPO_ACCESS_TOKEN` on the server to use Expo's enhanced push security.
 
 ### GET /me
 

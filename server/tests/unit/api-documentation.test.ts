@@ -17,7 +17,7 @@ test('feature tables document every registered endpoint exactly once', () => {
   }
   const documented = [...documentation.matchAll(/^\| (GET|POST|PUT|PATCH|DELETE) \| `([^`]+)` \|/gm)]
     .map(match => `${match[1]} ${match[2]}`);
-  expect(expected).toHaveLength(32);
+  expect(expected).toHaveLength(35);
   expect(new Set(documented).size).toBe(documented.length);
   expect(documented.sort()).toEqual(expected.sort());
 });

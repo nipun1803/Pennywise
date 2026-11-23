@@ -9,6 +9,7 @@ import { ApiError } from '../utils/errors';
 import * as groupService from '../services/groups';
 import { auditedUpdate } from '../services/audit';
 import { balancesFor, paymentsFor } from '../services/ledger';
+import { notifyMemberJoined } from '../services/notifications';
 
 export const create: RequestHandler = async (req, res) => {
   const { name, ...details } = groupSchema.parse(req.body);
@@ -31,6 +32,7 @@ export const join: RequestHandler = async (req, res) => {
       return { updates: { members: [...before.members, new Types.ObjectId(res.locals.userId)] }, before: null, after: { memberId: res.locals.userId } };
     });
   } catch (error) { if (error instanceof ApiError && error.status === 404) throw new ApiError(404, 'NOT_FOUND', 'Group not found'); throw error; }
+  if (!alreadyMember) notifyMemberJoined(group, res.locals.userId);
   res.json({ data: groupView(group), alreadyMember });
 };
 export const detail: RequestHandler = (_req, res) => { res.json({ data: groupView(context(res).group) }); };
@@ -53,13 +55,13 @@ export const members: RequestHandler = async (req, res) => {
   const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const filter = { _id: { $in: context(res).group.members }, ...(search ? { name: { $regex: escaped, $options: 'i' } } : {}) };
   const [users, total] = await Promise.all([User.find(filter).sort({ name: 1, _id: 1 }).skip(skip).limit(limit).lean(), User.countDocuments(filter)]);
-  res.json({ data: users.map(u => ({ id: String(u._id), name: u.name })), pagination: pageView(page, limit, total) });
+  res.json({ data: users.map(u => ({ id: String(u._id), name: u.name, image: u.image ?? null })), pagination: pageView(page, limit, total) });
 };
 export const balances: RequestHandler = async (_req, res) => {
   const group = context(res).group;
   const balances = await balancesFor(group);
   const users = await User.find({ _id: { $in: balances.map(b => b.userId) } }).lean();
-  const names = new Map(users.map(u => [String(u._id), u.name]));
-  res.json({ data: balances.map(b => ({ ...b, name: names.get(b.userId) })) });
+  const profiles = new Map(users.map(u => [String(u._id), u]));
+  res.json({ data: balances.map(b => ({ ...b, name: profiles.get(b.userId)?.name, image: profiles.get(b.userId)?.image ?? null })) });
 };
 export const settleUp: RequestHandler = async (_req, res) => { res.json({ data: await paymentsFor(context(res).group) }); };

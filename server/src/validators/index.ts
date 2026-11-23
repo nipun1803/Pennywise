@@ -15,6 +15,9 @@ export const nameSchema = z.object({ name }).strict();
 const accent = z.enum(['emerald', 'blue', 'amber', 'violet', 'rose']);
 export const profileSchema = z.object({ image: imageSchema.optional(), name: name.optional(), avatar: z.enum(['initials', 'leaf', 'sun', 'sparkles', 'coffee']).optional(), avatarColor: accent.optional() }).strict()
   .refine(input => Object.keys(input).length > 0, 'Provide at least one profile field');
+export const pushTokenSchema = z.object({ token: z.string().trim().regex(/^Expo(nent)?PushToken\[[\w-]{1,100}\]$/, 'Invalid Expo push token') }).strict();
+export const notificationsSchema = z.object({ expenses: z.boolean().optional(), payments: z.boolean().optional(), members: z.boolean().optional() }).strict()
+  .refine(input => Object.keys(input).length > 0, 'Provide at least one notification preference');
 export const groupSchema = z.object({ image: imageSchema.optional(), name, description: z.string().trim().max(200).optional(), icon: z.enum(['people', 'airplane', 'home', 'restaurant', 'briefcase', 'heart']).optional(), color: accent.optional() }).strict();
 export const groupUpdateSchema = groupSchema.partial().refine(input => Object.keys(input).length > 0, 'Provide at least one group field');
 export const categorySchema = z.object({ name, icon: z.enum(['food', 'cart', 'bus', 'home', 'bulb', 'bag', 'game', 'airplane', 'heart', 'grid']).default('grid'), color: accent.default('emerald') }).strict();
