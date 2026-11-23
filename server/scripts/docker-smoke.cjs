@@ -112,14 +112,35 @@ async function main() {
   const code = (await api('POST', `/groups/${groupId}/join-code`, undefined, alice.token)).data.joinCode;
   await api('POST', '/groups/join', { code: group.joinCode }, outsider.token, undefined, 404);
   await api('POST', '/groups/join', { code }, outsider.token);
-  assert.equal(seen.size, 28, 'Every implemented endpoint must be exercised');
+  // Cross-group, notification and photo routes added after the original 28.
+  const dashboard = (await api('GET', '/dashboard', undefined, alice.token)).data;
+  assert.equal(dashboard.groups.length, 1);
+  assert.ok((await api('GET', '/activity?kind=expenses', undefined, alice.token)).data.length > 0);
+  assert.equal((await api('PATCH', '/me/notifications', { payments: false }, alice.token)).data.notifications.payments, false);
+  const pushToken = { token: 'ExponentPushToken[docker-smoke-token]' };
+  await api('PUT', '/me/push-token', pushToken, alice.token, undefined, 204);
+  await api('DELETE', '/me/push-token', pushToken, alice.token, undefined, 204);
+  // No Cloudinary credentials are passed to this container, so uploads must report that cleanly.
+  const upload = await api('POST', '/media/images', { image: 'data:image/png;base64,iVBORw0KGgo=' }, alice.token, undefined, 503);
+  assert.equal(upload.error.code, 'MEDIA_UNAVAILABLE');
+  assert.equal((await api('GET', '/openapi.json')).openapi, '3.1.0');
+  assert.equal(seen.size, 35, 'Every implemented endpoint must be exercised');
+
+  // Production mode enables rate limiting: sign-in attempts share one budget per IP.
+  let limited;
+  for (let attempt = 0; attempt < 25 && !limited; attempt++) {
+    const response = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'nobody@example.com', password: 'wrong-password' }) });
+    if (response.status === 429) limited = await response.json();
+  }
+  assert.equal(limited?.error.code, 'AUTH_RATE_LIMITED', 'Repeated sign-ins must be rate limited');
+  assert.equal((await api('GET', '/health')).data.status, 'ok', '/health stays reachable while limited');
 
   const inspection = JSON.parse((await docker(['inspect', name])).stdout)[0];
   assert.equal(inspection.Config.User, 'node');
   const healthCommand = inspection.Config.Healthcheck.Test[1];
   await docker(['exec', name, 'sh', '-c', healthCommand]);
   await docker(['exec', name, 'node', '-e', "const fs=require('node:fs'); if(fs.existsSync('.env') || fs.existsSync('tests') || fs.existsSync('node_modules/typescript') || fs.existsSync('node_modules/mongodb-memory-server')) process.exit(1)"]);
-  console.log('Docker smoke passed: all 28 endpoints, permissions, retries, categories, activity, statements, non-root runtime, healthcheck, and production-only files.');
+  console.log('Docker smoke passed: all 35 endpoints, permissions, retries, categories, activity, statements, rate limiting, non-root runtime, healthcheck, and production-only files.');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

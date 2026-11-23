@@ -12,6 +12,7 @@ services:
       MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI using --env-file}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET using --env-file}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
       # Optional; without all three, photo uploads return 503 MEDIA_UNAVAILABLE.
       CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
       CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
