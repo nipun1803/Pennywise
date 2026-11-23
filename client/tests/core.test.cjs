@@ -15,6 +15,15 @@ function load(file, mocks = {}, globals = {}) {
 }
 const format = load('lib/format.ts');
 
+test('square photo crops stay within portrait and landscape bounds at all zoom positions', () => {
+  const { squareCrop } = load('lib/photos.ts', { './api': {} });
+  for (const [width, height] of [[1200, 800], [800, 1200], [801, 801]]) for (const zoom of [1, 1.25, 3]) for (const x of [-1, 0, 0.5, 1, 2]) for (const y of [-1, 0, 0.5, 1, 2]) {
+    const crop = squareCrop(width, height, zoom, { x, y });
+    assert.equal(crop.width, crop.height); assert.ok(crop.originX >= 0 && crop.originY >= 0);
+    assert.ok(crop.originX + crop.width <= width && crop.originY + crop.height <= height);
+  }
+});
+
 test('INR formats exact paise, Indian grouping, signs and largest safe amounts', () => {
   assert.equal(format.formatINR(12345650), '₹1,23,456.50');
   assert.equal(format.formatINR(1), '₹0.01'); assert.equal(format.formatINR(0), '₹0.00');
