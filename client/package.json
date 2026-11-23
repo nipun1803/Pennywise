@@ -52,6 +52,7 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
+    "eas-build-pre-install": "node -e \"if (process.env.GOOGLE_SERVICES_BASE64) { require('fs').writeFileSync('google-services.json', Buffer.from(process.env.GOOGLE_SERVICES_BASE64, 'base64')); console.log('Recreated google-services.json from secret'); } else if (process.env.GOOGLE_SERVICES_FILE && require('fs').existsSync(process.env.GOOGLE_SERVICES_FILE)) { require('fs').copyFileSync(process.env.GOOGLE_SERVICES_FILE, 'google-services.json'); console.log('Copied google-services.json from env'); } else if (process.env.GOOGLE_SERVICES_JSON) { try { if (require('fs').existsSync(process.env.GOOGLE_SERVICES_JSON)) { require('fs').copyFileSync(process.env.GOOGLE_SERVICES_JSON, 'google-services.json'); } else { require('fs').writeFileSync('google-services.json', process.env.GOOGLE_SERVICES_JSON); } console.log('Wrote google-services.json from GOOGLE_SERVICES_JSON'); } catch(e){} } else { console.warn('No google-services environment variable found!'); }\"",
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
