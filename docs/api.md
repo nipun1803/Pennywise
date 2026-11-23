@@ -70,11 +70,13 @@ The following examples are reusable response shapes. Every endpoint below specif
   "email": "alice@example.com",
   "avatar": "initials",
   "avatarColor": "emerald",
+  "image": null,
+  "notifications": { "expenses": true, "payments": true, "members": true },
   "createdAt": "2026-11-19T10:00:00.000Z"
 }
 ```
 
-Only authentication and `/me` expose the authenticated user's email. Member lists contain only `id` and `name`. Password hashes are never returned.
+Only authentication and `/me` expose the authenticated user's email. Member lists contain only `id`, `name` and `image`. Password hashes are never returned.
 
 ### Group
 
@@ -85,6 +87,7 @@ Only authentication and `/me` expose the authenticated user's email. Member list
   "description": "A weekend by the sea",
   "icon": "airplane",
   "color": "emerald",
+  "image": null,
   "joinCode": "K7M2QX",
   "createdBy": "507f1f77bcf86cd799439011",
   "memberCount": 3,
@@ -143,7 +146,7 @@ Both User and Group responses include `image`: `null` (initials), `preset:people
 | POST | `/auth/signup` | Public | `name`, `email`, `password` | 201 — `data: { token, user }` |
 | POST | `/auth/login` | Public | `email`, `password` | 200 — `data: { token, user }` |
 | GET | `/me` | JWT | None | 200 — `data: User` |
-| PATCH | `/me` | JWT | Any of `name`, `avatar`, `avatarColor` | 200 — `data: User` |
+| PATCH | `/me` | JWT | Any of `name`, `image`, `avatar`, `avatarColor` | 200 — `data: User` |
 | PATCH | `/me/notifications` | JWT | Any of `expenses`, `payments`, `members` (booleans) | 200 — `data: User` |
 | PUT | `/me/push-token` | JWT | `token` (Expo push token) | 204 |
 | DELETE | `/me/push-token` | JWT | `token` (Expo push token) | 204 |
@@ -205,7 +208,7 @@ Token required. No body. Response **200**: `{ "data": <User> }`.
 
 ### PATCH /me
 
-Token required. Updates the authenticated user's display name or preset avatar. Provide at least one field. `avatar`: `initials`, `leaf`, `sun`, `sparkles`, `coffee`. `avatarColor`: `emerald`, `blue`, `amber`, `violet`, `rose`. No image uploads.
+Token required. Updates the authenticated user's display name, photo or preset avatar. Provide at least one field. `avatar`: `initials`, `leaf`, `sun`, `sparkles`, `coffee`. `avatarColor`: `emerald`, `blue`, `amber`, `violet`, `rose`. `image`: `null`, a `preset:` value or a URL returned by `POST /media/images` (see below).
 
 Request:
 ```json
@@ -233,7 +236,7 @@ Photo uploads require the three Cloudinary server environment variables in `serv
 | GET | `/groups` | JWT; own groups only | Query: `page`, `limit` | 200 — `data: Group[]`, `pagination` |
 | POST | `/groups/join` | JWT | Body: `code` | 200 — `data: Group`, `alreadyMember` |
 | GET | `/groups/:id` | Member | None | 200 — `data: Group` |
-| GET | `/groups/:id/members` | Member | Query: `page`, `limit`, `search` | 200 — `data: { id, name }[]`, `pagination` |
+| GET | `/groups/:id/members` | Member | Query: `page`, `limit`, `search` | 200 — `data: { id, name, image }[]`, `pagination` |
 | PATCH | `/groups/:id` | Group creator | Any of `name`, `description`, `icon`, `color` | 200 — `data: Group` |
 | POST | `/groups/:id/join-code` | Group creator | None | 200 — `data: { joinCode }` |
 
@@ -276,7 +279,7 @@ Member required. No body. Optional search performs a literal, case-insensitive s
 Response **200**:
 ```json
 {
-  "data": [{ "id": "507f1f77bcf86cd799439011", "name": "Alice" }],
+  "data": [{ "id": "507f1f77bcf86cd799439011", "name": "Alice", "image": null }],
   "pagination": { "page": 1, "limit": 25, "total": 1, "totalPages": 1 }
 }
 ```
@@ -372,7 +375,7 @@ Expense author or group creator required. No body. Response **204**, including r
 
 | Method | Endpoint | Access | Request | Success |
 | --- | --- | --- | --- | --- |
-| GET | `/groups/:id/balances` | Member | No body or pagination | 200 — `data: { userId, balanceCents, name }[]` |
+| GET | `/groups/:id/balances` | Member | No body or pagination | 200 — `data: { userId, balanceCents, name, image }[]` |
 | GET | `/groups/:id/settle-up` | Member | No body or pagination | 200 — `data: { fromUser, toUser, amountCents }[]` |
 
 ### GET /groups/:id/balances
@@ -381,9 +384,9 @@ Member required. No body or pagination. With only the 100-cent example expense, 
 ```json
 {
   "data": [
-    { "userId": "507f1f77bcf86cd799439011", "balanceCents": 66, "name": "Alice" },
-    { "userId": "507f1f77bcf86cd799439012", "balanceCents": -33, "name": "Bob" },
-    { "userId": "507f1f77bcf86cd799439013", "balanceCents": -33, "name": "Charlie" }
+    { "userId": "507f1f77bcf86cd799439011", "balanceCents": 66, "name": "Alice", "image": null },
+    { "userId": "507f1f77bcf86cd799439012", "balanceCents": -33, "name": "Bob", "image": null },
+    { "userId": "507f1f77bcf86cd799439013", "balanceCents": -33, "name": "Charlie", "image": null }
   ]
 }
 ```
@@ -508,6 +511,7 @@ Example **403**:
 - **409 EMAIL_IN_USE**: normalized email already registered.
 - **409 IDEMPOTENCY_CONFLICT**: key reused with a different normalized request.
 - **413 PAYLOAD_TOO_LARGE**: JSON exceeds 1 MiB.
+- **429 RATE_LIMITED / AUTH_RATE_LIMITED / JOIN_RATE_LIMITED / UPLOAD_LIMIT**: see [Rate limits](#rate-limits).
 - **415 UNSUPPORTED_MEDIA_TYPE**: unsupported JSON charset or content encoding.
 - **422 BALANCE_OVERFLOW**: aggregate balance cannot be represented safely as integer cents.
 - **503 CODE_UNAVAILABLE**: code generation exhausted its bounded collision retries; retry later.
@@ -515,7 +519,18 @@ Example **403**:
 
 Authentication and membership are checked before controller validation on protected group routes. Consequently a non-member receives 403 even if their write body is invalid. Unknown routes without a token may return 401.
 
-**Rate limiting is deferred at the user's request, including group joining. There are no implemented 429 responses yet. Add brute-force protection before public production exposure.**
+## Rate limits
+
+Limits are per client IP unless noted, counted in server memory over a 15-minute window, and every limited response is **429** with the standard error body plus `RateLimit` headers.
+
+| Scope | Limit | Code |
+| --- | --- | --- |
+| Every route except `/health` | 1500 requests | `RATE_LIMITED` |
+| `POST /auth/signup` and `/auth/login` (shared budget) | 20 requests | `AUTH_RATE_LIMITED` |
+| `POST /groups/join` (per signed-in user) | 15 requests | `JOIN_RATE_LIMITED` |
+| `POST /media/images` (per signed-in user) | 5 per minute | `UPLOAD_LIMIT` |
+
+Behind a reverse proxy, set `TRUST_PROXY` to the number of proxy hops; otherwise every client shares the proxy's IP. Counters reset on restart and are not shared between instances.
 
 ## cURL walkthrough
 

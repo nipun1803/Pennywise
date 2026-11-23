@@ -60,3 +60,10 @@ Thumbs.db
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Private docs (kept locally, not published)
+docs/backend-audit.md
+
+# Firebase / Google Services
+google-services.json
+**/google-services.json

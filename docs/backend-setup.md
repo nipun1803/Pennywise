@@ -53,6 +53,7 @@ Replace placeholders, including the database name. URL-encode special password c
 - `PORT`: integer 1–65535; default 3000.
 - `MONGODB_URI`: required database connection URI.
 - `JWT_SECRET`: required, at least 32 characters; use a cryptographically random value.
+- `TRUST_PROXY`: number of reverse-proxy hops in front of the API (0–10); default 0. Set `1` on hosts such as Render so rate limits count real client IPs. A wrong value lets clients spoof their IP, so leave it 0 when clients connect directly.
 - `CORS_ORIGINS`: comma-separated exact browser origins, e.g. `http://localhost:8081`. Empty allows requests without an Origin header (such as native mobile clients), but not arbitrary browser origins.
 
 JWT lifetime is fixed to seven days. No refresh token or token revocation service exists. CORS is a browser policy, not an authorization replacement.
@@ -119,7 +120,7 @@ Coverage includes money validation, remainder cents, zero shares, zero-sum balan
 
 The frontend extensions add categories/exclusions, group/profile presets, reliable concurrent join status, audit failure atomicity, concurrent audit before-images, deleted activity, and full-ledger corrected statements.
 
-The cross-check results and remaining limitations are recorded in [backend-audit.md](backend-audit.md).
+Design decisions and known limitations are recorded in [architecture.md](architecture.md).
 
 ## Structure
 
@@ -129,10 +130,16 @@ server/
     app.ts                 Express factory, safe to import in tests
     index.ts               startup, database connection, shutdown
     config/                validated environment
-    routes/                endpoint registration
+    routes/                endpoint registration, one router per resource
+      index.ts             mounts the routers (order matters, see architecture.md)
+      auth.ts users.ts media.ts dashboard.ts groups.ts
+      records.ts categories.ts expenses.ts settlements.ts
     controllers/           HTTP parsing/response handling
     services/              business rules, ledger loading, idempotency
-    models/                Mongoose schemas and indexes
+    models/                Mongoose schemas and indexes, one file per collection
+      index.ts             re-exports every model + ensureIndexes()
+      shared.ts            audit + idempotent-creation fields shared by expenses/settlements
+      user.ts group.ts expense.ts settlement.ts category.ts
     validators/            Zod request schemas
     middleware/            JWT, group membership, permissions
     shared/                pure integer-cent calculation functions
@@ -141,8 +148,13 @@ server/
     unit/
     api/
 docs/
-  api.md
-  backend-setup.md
+  architecture.md              HLD, layers, sequence diagrams, design decisions
+  api.md                       every endpoint
+  data-model.md                ER diagram, indexes, invariants
+  balances-and-settlement.md   split, balance and settle-up algorithms
+  user-flows.md                screen-by-screen user flows
+  testing.md                   test suites and commands
+  backend-setup.md             this file
 ```
 
 User email and group join code have unique indexes. Membership and ledger group queries are indexed. Ledger pagination uses group/creation-time/ID indexes. Each ledger collection also has a unique `(groupId, createdBy, requestKey)` index. Startup awaits index initialization before serving requests; database credentials must permit creation of these indexes.
@@ -157,18 +169,30 @@ Independent edits use version-checked atomic updates with bounded retries and ac
 
 ## Production deployment checklist
 
-Backend-only Docker support is available. No live deployment or paid resources were created.
+Backend-only Docker support is available. The Expo `preview` build profile in `client/eas.json` targets a Render-hosted API (`https://pennywise-vfs4.onrender.com`). On Render set `MONGODB_URI`, `JWT_SECRET`, `NODE_ENV=production`, `TRUST_PROXY=1` and the Cloudinary variables; Render supplies `PORT`. Free instances sleep when idle, so the first request after a pause can take longer than the app's 15-second timeout.
 
 1. Configure the host's secret environment variables, including Atlas URI and a strong JWT secret. Use a least-privilege database user and narrow network access.
 2. Install/build with `npm ci` and `npm run build`. Run `npm start`; point readiness checks at `/health`.
 3. Terminate **HTTPS** at the hosting provider/reverse proxy and prevent public plain-HTTP access. Local HTTP is for development only.
 4. Set `NODE_ENV=production` and explicit browser CORS origins. Native mobile traffic without an Origin still requires JWT/membership checks.
 5. Review database backups, indexes, monitoring, error logs, and resource limits. MongoDB document limits still apply despite no application member cap. Large full-ledger requests need monitoring.
-6. **Add rate limiting before public exposure.** At the user's request, signup/login/join limits are deferred until frontend completion. Group codes are bearer invitations; guessing protection is still necessary. Shared limiter storage is required if running multiple backend instances.
+6. **Rate limiting is built in** (global, signup/login, join, photo upload; see [api.md](api.md#rate-limits)) and enabled by `src/index.ts`. Set `TRUST_PROXY` for your host. Counters live in process memory, so running several backend instances needs a shared store such as Redis.
 7. Re-run `npm audit` and resolve/review advisories before deployment. At implementation time the production dependency audit was clean; the scaffold's Jest 30 dependency tree had moderate development-only glob/minimatch advisories. Do not use forced breaking updates blindly.
 8. Avoid logging Authorization headers, passwords, and database URIs. Configure the host to restart failed processes and allow graceful SIGTERM shutdown.
 
 Changing `JWT_SECRET` invalidates all existing tokens. There is no refresh, password reset, verification, payments integration, offline write queue, or social login.
+
+## Deploying to Render (checklist)
+
+The preview client build targets a Render web service. To reproduce or repair it:
+
+1. Create a **Web Service** from `server/` (Docker, using `server/Dockerfile`, or Node with build `npm ci && npm run build` and start `npm start`). Set the health check path to `/health`.
+2. Set environment variables: `NODE_ENV=production`, `MONGODB_URI` (Atlas, least-privilege user, Render's outbound IPs allowed), `JWT_SECRET` (random, 32+ characters), `TRUST_PROXY=1`, and optionally `CORS_ORIGINS` (exact web origin), the three `CLOUDINARY_*` values and `EXPO_ACCESS_TOKEN`. Do not set `PORT`; Render provides it.
+3. Deploy and open `https://<service>.onrender.com/health`; expect `{"data":{"status":"ok"}}`. A 503 means the database is unreachable.
+4. Put that HTTPS URL into `EXPO_PUBLIC_API_URL` (`client/eas.json` preview profile, or `client/.env` locally) and rebuild the client.
+5. Free instances sleep after idle time, so the first request can be slow and may hit the client's 15-second timeout. Use a paid instance or an uptime pinger for demos.
+6. Rate-limit counters are in memory per instance. Run a single instance, or add a shared store before scaling out.
+7. Changing `JWT_SECRET` logs everyone out. Rotating Cloudinary or Atlas credentials needs a redeploy.
 
 ## Connecting the mobile client
 

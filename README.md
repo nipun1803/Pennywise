@@ -73,7 +73,11 @@ npm start
 ## 📖 Documentation
 
 Detailed architectural and API guides are available in the [`docs/`](./docs) folder:
+- [Architecture](./docs/architecture.md): high-level design, server layers, sequence diagrams, design decisions
 - [API Documentation](./docs/api.md)
-- [Client Setup & Behavior](./client/README.md)
+- [Data Model](./docs/data-model.md): ER diagram, indexes, invariants
+- [Balances & Settle-up](./docs/balances-and-settlement.md): how splits, balances and repayment suggestions are calculated
+- [User Flows](./docs/user-flows.md): screen-by-screen flow diagrams
+- [Testing](./docs/testing.md)
 - [Backend Setup Guide](./docs/backend-setup.md)
-- [Backend Audit & Architecture](./docs/backend-audit.md)
+- [Client README](./client/README.md): setup, env, screens, session and cache behavior, push, photos, folder structure, tests, builds, troubleshooting
