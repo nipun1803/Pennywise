@@ -25,7 +25,10 @@ const paymentBody = () => ({ fromUser: bob.id, toUser: alice.id, amountCents: 20
 const postExpense = (key = randomUUID(), body: Record<string, unknown> = expenseBody(), token = alice.token) => request(app).post(`/groups/${groupId}/expenses`).set('Authorization', auth(token)).set('Idempotency-Key', key).send(body);
 const postPayment = (key = randomUUID(), body = paymentBody(), token = alice.token) => request(app).post(`/groups/${groupId}/settlements`).set('Authorization', auth(token)).set('Idempotency-Key', key).send(body);
 
+// Pushes are fire-and-forget jobs. Default to a no-op sender so no test can reach Expo's servers.
+const silentPush = async () => [] as PushTicket[];
 beforeAll(async () => {
+  setPushSender(silentPush);
   // Standalone instance: these tests deliberately do not use a replica set.
   mongo = await MongoMemoryServer.create();
   await mongoose.connect(mongo.getUri(), { dbName: 'pennywise_isolated_tests' });
@@ -38,6 +41,8 @@ beforeAll(async () => {
   alice = await account('Alice'); bob = await account('Bob'); charlie = await account('Charlie'); outsider = await account('Outsider');
 });
 beforeEach(async () => {
+  // Let the previous test's push jobs finish before their data is wiped.
+  await flushNotifications();
   await Promise.all([Group.deleteMany({}), Expense.deleteMany({}), Settlement.deleteMany({}), Category.deleteMany({})]);
   const result = await request(app).post('/groups').set('Authorization', auth()).send({ name: 'Weekend trip' });
   expect(result.status).toBe(201);
@@ -45,6 +50,8 @@ beforeEach(async () => {
   for (const user of [bob, charlie]) expect((await request(app).post('/groups/join').set('Authorization', auth(user.token)).send({ code })).status).toBe(200);
 });
 afterAll(async () => {
+  await flushNotifications();
+  setPushSender(null);
   await mongoose.disconnect();
   if (mongo) await mongo.stop();
 });
@@ -655,7 +662,7 @@ describe('push notifications', () => {
     await User.updateMany({}, { $set: { pushTokens: [], notifications: { expenses: true, payments: true, members: true } } });
     for (const user of [alice, bob, charlie]) expect((await register(user)).status).toBe(204);
   });
-  afterAll(() => setPushSender(null));
+  afterAll(() => setPushSender(silentPush));
 
   test('device tokens are validated, moved to the latest account, and removable', async () => {
     expect((await register(alice, 'not-a-token')).status).toBe(400);
@@ -756,4 +763,16 @@ describe('push notifications', () => {
     expect(failure).toHaveBeenCalledWith('Push notification failed:', 'Expo is down');
     failure.mockRestore();
   });
+});
+
+test('joining by code is limited per user, so invite codes cannot be guessed quickly', async () => {
+  const limited = createApp({ jwtSecret: secret, corsOrigins: [], rateLimits: { windowMs: 60_000, globalMax: 1000, authMax: 1000, joinMax: 2 } });
+  const join = (token: string, joinCode: string) => request(limited).post('/groups/join').set('Authorization', auth(token)).send({ code: joinCode });
+  expect((await join(outsider.token, 'ZZZZZZ')).status).toBe(404);
+  expect((await join(outsider.token, 'YYYYYY')).status).toBe(404);
+  const blocked = await join(outsider.token, code);
+  expect(blocked.status).toBe(429);
+  expect(blocked.body.error.code).toBe('JOIN_RATE_LIMITED');
+  // Another user has an independent budget.
+  expect((await join(charlie.token, 'ZZZZZZ')).status).toBe(404);
 });
