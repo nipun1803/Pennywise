@@ -33,9 +33,22 @@ export const upload: RequestHandler = async (req, res) => {
   const signature = createHash('sha1').update(`public_id=${publicId}&timestamp=${timestamp}${secret}`).digest('hex');
   const form = new FormData();
   for (const [key, value] of Object.entries({ file: image, api_key: apiKey, public_id: publicId, timestamp: String(timestamp), signature })) form.append(key, value);
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloud)}/image/upload`, { method: 'POST', body: form, signal: AbortSignal.timeout(12000) });
-  if (!response.ok) throw new ApiError(502, 'UPLOAD_FAILED', 'The photo could not be uploaded. Try a different image.');
-  const result = await response.json() as { secure_url: string; resource_type: string };
-  if (result.resource_type !== 'image') throw new ApiError(502, 'UPLOAD_FAILED', 'Only images are supported.');
+  let response: Response;
+  try {
+    response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloud)}/image/upload`, { method: 'POST', body: form, signal: AbortSignal.timeout(12000) });
+  } catch (error) {
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) throw new ApiError(504, 'UPLOAD_TIMEOUT', 'Photo upload timed out. Please try again.');
+    throw new ApiError(502, 'UPLOAD_FAILED', 'Photo storage could not be reached. Please try again shortly.');
+  }
+  const result = await response.json().catch(() => null) as { secure_url?: string; resource_type?: string; error?: { message?: string } } | null;
+  if (!response.ok) {
+    // Provider authentication failures are server configuration errors, not a
+    // bad image or an expired Pennywise session. Never expose provider secrets.
+    const message = typeof result?.error?.message === 'string' ? result.error.message : '';
+    if (response.status === 401 || response.status === 403 || /cloud[ _]name|api[ _]key|signature/i.test(message)) throw new ApiError(503, 'MEDIA_UNAVAILABLE', 'Photo storage configuration was rejected. The server Cloudinary cloud name and API credentials must match the same environment.');
+    if (response.status === 429 || response.status >= 500) throw new ApiError(502, 'UPLOAD_FAILED', 'Photo storage is temporarily unavailable. Please try again shortly.');
+    throw new ApiError(502, 'UPLOAD_FAILED', 'The photo could not be uploaded. Try a different image.');
+  }
+  if (result?.resource_type !== 'image' || typeof result.secure_url !== 'string' || !result.secure_url.startsWith(`https://res.cloudinary.com/${cloud}/image/upload/`) || !imageSchema.safeParse(result.secure_url).success) throw new ApiError(502, 'UPLOAD_FAILED', 'Photo storage returned an invalid image response. Please try again.');
   res.status(201).json({ data: { image: result.secure_url } });
 };
