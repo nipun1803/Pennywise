@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ComponentProps, type PropsWithChildre
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps, type TextStyle, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useApp } from '@/providers/app-provider';
-import { avatarIcons, avatarTones, fonts } from '@/theme/palette';
+import { avatarIcons, avatarTones, fonts, groupIcons } from '@/theme/palette';
 import { initials } from '@/lib/format';
 import type { Accent, Avatar as AvatarKind, Group, Pagination } from '@/lib/types';
 
@@ -109,9 +109,9 @@ const toneFor = (color?: Accent) => color === 'emerald' ? 'emerald' : color === 
 export function Avatar({ name, color, size = 44, label, image }: { name: string; color?: Accent; size?: number; label?: string; image?: string | null }) {
   const { dark } = useApp(); const [background, foreground] = avatarTones[dark ? 'dark' : 'light'][toneFor(color)];
   const [failed, setFailed] = useState<string | null>(null);
-  const presets: Record<string, IconName> = { people: 'people-outline', airplane: 'airplane-outline', home: 'home-outline', restaurant: 'restaurant-outline', briefcase: 'briefcase-outline', heart: 'heart-outline' };
-  if (image?.startsWith('preset:') && presets[image.slice(7)]) return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: background, alignItems: 'center', justifyContent: 'center' }}><Icon name={presets[image.slice(7)]} color={foreground} size={size * 0.48} /></View>;
-  if (image && image !== failed) return <Image source={{ uri: image }} accessibilityLabel={`${name} photo`} style={{ width: size, height: size, borderRadius: size / 2 }} contentFit="cover" onError={() => setFailed(image)} />;
+  const preset = image?.startsWith('preset:') ? groupIcons[image.slice(7) as keyof typeof groupIcons] : undefined;
+  if (preset) return <View accessibilityLabel={`${name} preset avatar`} style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: background, alignItems: 'center', justifyContent: 'center' }}><Icon name={preset} color={foreground} size={size * 0.48} /></View>;
+  if (image && !image.startsWith('preset:') && image !== failed) return <Image source={{ uri: image }} accessibilityLabel={`${name} photo`} style={{ width: size, height: size, borderRadius: size / 2 }} contentFit="cover" onError={() => setFailed(image)} />;
   return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: background, alignItems: 'center', justifyContent: 'center' }}><Label size={Math.round(size * 0.36)} weight={600} color={foreground}>{label ?? initials(name)}</Label></View>;
 }
 export function GroupCard({ group, subtitle, onPress }: { group: Group; subtitle?: string; onPress: () => void }) {
@@ -121,7 +121,7 @@ export function GroupCard({ group, subtitle, onPress }: { group: Group; subtitle
 export function AvatarBadge({ name, avatar = 'initials', color, size = 44, image }: { name: string; avatar?: AvatarKind; color?: Accent; size?: number; image?: string | null }) {
   const { dark } = useApp(); const [background, foreground] = avatarTones[dark ? 'dark' : 'light'][toneFor(color)];
   if (image || avatar === 'initials') return <Avatar name={name} image={image} color={color} size={size} />;
-  return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: background, alignItems: 'center', justifyContent: 'center' }}><Icon name={avatarIcons[avatar]} color={foreground} size={size * 0.48} /></View>;
+  return <View accessibilityLabel={`${name} ${avatar} avatar`} style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: background, alignItems: 'center', justifyContent: 'center' }}><Icon name={avatarIcons[avatar]} color={foreground} size={size * 0.48} /></View>;
 }
 export function Chips<T extends string>({ options, value, onChange, disabled = false }: { options: readonly { value: T; label: string }[]; value: T; onChange: (value: T) => void; disabled?: boolean }) { const { colors } = useApp(); return <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>{options.map(option => <Pressable key={option.value} accessibilityRole="button" accessibilityState={{ selected: value === option.value, disabled }} disabled={disabled} onPress={() => onChange(option.value)} style={[styles.chip, { backgroundColor: value === option.value ? colors.primary : colors.tint }]}><Label size={14} weight={600} color={value === option.value ? colors.onPrimary : colors.link}>{option.label}</Label></Pressable>)}</View>; }
 // Underlined text tabs from the group and activity screens; `inset` narrows the indicator.

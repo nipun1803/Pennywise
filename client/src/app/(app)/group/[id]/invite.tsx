@@ -19,7 +19,7 @@ export default function Invite() {
   return <Sheet title={`Invite to ${data?.name ?? 'group'}`} subtitle="Scan the QR or enter the code to join.">
     {!!group.error && <View style={{ marginTop: 16 }}><ResourceError message={group.error} retry={() => void group.reload()} /></View>}
     {group.loading && !data ? <View style={{ marginTop: 20 }}><Skeletons count={2} /></View> : data && <>
-      <View style={[styles.row, { gap: 14, marginTop: 24 }]}><Avatar name={data.name} color={data.color} size={40} /><View style={{ flex: 1, gap: 2 }}><Label size={17} weight={500} lines={1}>{data.name}</Label><Label muted size={15}>{data.memberCount} {data.memberCount === 1 ? 'member' : 'members'} · INR</Label></View></View>
+      <View style={[styles.row, { gap: 14, marginTop: 24 }]}><Avatar name={data.name} image={data.image} color={data.color} size={40} /><View style={{ flex: 1, gap: 2 }}><Label size={17} weight={500} lines={1}>{data.name}</Label><Label muted size={15}>{data.memberCount} {data.memberCount === 1 ? 'member' : 'members'} · INR</Label></View></View>
       <View style={{ alignSelf: 'center', marginTop: 24, padding: 12, borderRadius: 24, backgroundColor: colors.raised }}><QrCode value={inviteLink(data.joinCode)} size={180} /></View>
       <Pressable accessibilityRole="button" accessibilityLabel={`Join code ${data.joinCode}. Copy`} onPress={() => void copy()} style={({ pressed }) => [styles.input, { marginTop: 22, minHeight: 62, borderRadius: 20, backgroundColor: colors.background, borderColor: colors.border, opacity: pressed ? 0.8 : 1 }]}>
         <View style={{ flex: 1 }}><Label size={18} weight={600}>{data.joinCode.split('').join(' ')}</Label></View><Feather name="copy" size={24} color={colors.link} />

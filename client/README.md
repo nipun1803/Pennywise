@@ -34,9 +34,9 @@ Mutation keys use Expo's built-in `uuid.v4()`, so they do not require the separa
 - Group overview: invite Copy/Share, own balance, Expenses · Balances · Payments, Members, Settings, and Activity & Statements.
 - Equal splitting: Everyone with searchable exclusions or selected members; at least one participant; payer may be excluded. Category and description required. Shares appear from the server after saving.
 - Payments are unverified external records, including partial/overpayments and entries on someone else's behalf. Overpayment and correction confirmations do not initiate or reverse transfers.
-- Creator-only group metadata/code rotation and category rename/archive. Any member may create categories or record/correct/delete payments. Expense changes require author/creator permission. Preset icons/colors/avatars only, no uploads.
+- Creator-only group photo/preset changes, metadata/code rotation, and category rename/archive. Any member may create categories or record/correct/delete payments. Expense changes require author/creator permission. Category icon/color choices remain available.
 - Group Records: activity with actor/time and before/after details, corrected member account (self by default), and group spending excluding repayments. History starts with the feature rollout; earlier actions are not reconstructed.
-- Profile: name, initials/preset avatar, System/Light/Dark emerald theme, Logout.
+- Profile: name, photo or built-in avatar with colored initials fallback, System/Light/Dark emerald theme, Logout.
 
 ## Session, cache, and retries
 
@@ -73,8 +73,12 @@ Production web export: `npx expo export --platform web`. Android/iOS bundle expo
 - `src/screens/`: reusable auth, group forms, and category manager; retained starter examples are not routes.
 
 Read `AGENTS.md` before Expo/React Native changes. Public launch also needs backend rate limits and a review of dependency advisories and retained audit-document sizes; see the backend deployment checklist.
-# Photos and new tests
+## Photos and component tests
 
-Photo uploads use the backend's `/media/images` endpoint. Add `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` to `server/.env`, then restart the API. Find these in your Cloudinary dashboard's API Keys settings. Never put the secret in an `EXPO_PUBLIC_*` variable or commit `.env`. Built-in group icons and initials work without credentials. The picker supports JPEG/PNG/WebP images up to 5 MB; uploaded photos are public URLs. New native builds need the added image-picker permission plugin; Expo Go already includes image-picker.
+Tap the profile/group avatar to open **Take photo / Choose from gallery / Remove photo**. Only the group creator can change/remove a group photo or preset; other members see a read-only avatar, and direct group-update API requests are forbidden. Profile photos remain editable by their owner. The crop screen supports dragging and pinch-to-zoom, with a pinned **Done** button. Done uploads and saves existing photos immediately, separately from name/description edits. Removal saves immediately too. Failed uploads or updates keep the previous photo and offer **Retry**; a successful upload URL is reused when retrying a failed record update. Profile initials/Leaf/Sun/Sparkles/Coffee and group Friends/Trip/Home/Food/Work/Family presets are available alongside photos and save immediately without uploads. Selecting a profile avatar clears its photo. A new group's photo or preset stays local until **Create group**. The profile color picker remains removed; existing avatar colors are preserved.
+
+Photo uploads use `/media/images`. Configure `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` in `server/.env`, then restart the API. Never place these secrets in an `EXPO_PUBLIC_*` variable or commit `.env`. Selected images are normalized to JPEG, cropped, and resized to at most 768 × 768; uploads are limited to 5 MB and stored as public URLs. Installed native apps need a rebuild if they do not yet include `expo-image-manipulator` and the image-picker permission plugin. SDK 58 Expo Go includes both modules.
+
+If Cloudinary returns `Invalid cloud_name` or `cloud_name mismatch`, check that the cloud name and API key/secret come from the same product environment in the Cloudinary dashboard. This is a storage configuration rejection, not a crop/image problem. The backend now reports this separately from invalid images, network failures, and timeouts. The backend launched with `npm start` runs compiled `dist/` code: rebuild and restart after backend code or `.env` changes.
 
 Run `npm run test:components` for React Native Testing Library tests (Jest/Expo). Existing pure unit tests remain available with `npm test`. Home and Reports now use `/dashboard`; Activity uses the globally paginated `/activity` endpoint. Restart the backend alongside the client update.
