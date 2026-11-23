@@ -21,7 +21,8 @@
       "permissions": [
         "android.permission.CAMERA"
       ],
-      "package": "com.nipun_appdev.pennywise"
+      "package": "com.nipun_appdev.pennywise",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "output": "server",
@@ -39,16 +40,25 @@
       ],
       "expo-secure-store",
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/android-icon-monochrome.png",
+          "color": "#595CDF",
+          "defaultChannel": "default"
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "Choose a profile or group photo for Pennywise.",
+          "cameraPermission": "Pennywise uses the camera to take profile and group photos and scan invite QR codes.",
           "microphonePermission": false
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Pennywise uses the camera to scan group invite QR codes.",
+          "cameraPermission": "Pennywise uses the camera to take profile and group photos and scan invite QR codes.",
           "recordAudioAndroid": false
         }
       ]

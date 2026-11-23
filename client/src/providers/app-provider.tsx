@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { useColorScheme } from 'react-native';
 import { configureSession, request } from '@/lib/api';
 import { tokenExpiry } from '@/lib/format';
+import { unregisterPush } from '@/lib/push';
 import { clearAccountCaches, readSession, writeSession } from '@/lib/storage';
 import type { Session, User } from '@/lib/types';
 import { palette, type AppColors } from '@/theme/palette';
@@ -91,6 +92,6 @@ export function AppProvider({ children }: PropsWithChildren) {
   };
   return <AppContext.Provider value={{ session, loading, offline, colors: palette[dark ? 'dark' : 'light'], dark, themeMode,
     setThemeMode: mode => { setMode(mode); void AsyncStorage.setItem('pennywise.theme', mode).catch(() => notify('Theme changed, but could not be saved.')); },
-    authenticate, updateUser, logout: () => clearSession(), revision, invalidate: () => setRevision(value => value + 1), message, notify, pendingCode, setPendingCode }}>{children}</AppContext.Provider>;
+    authenticate, updateUser, logout: async () => { await unregisterPush(); await clearSession(); }, revision, invalidate: () => setRevision(value => value + 1), message, notify, pendingCode, setPendingCode }}>{children}</AppContext.Provider>;
 }
 export function useApp() { const state = useContext(AppContext); if (!state) throw new Error('AppProvider is missing'); return state; }
