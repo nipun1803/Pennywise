@@ -8,13 +8,13 @@ import { AppProvider, useApp } from '@/providers/app-provider';
 
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
 function Navigator() {
-  const { session, loading, dark, colors, pendingCode, invalidate } = useApp();
+  const { session, loading, dark, colors, pendingCode, invalidate, offline } = useApp();
   // A font error falls back to the system face rather than blocking the app.
   const [fontsLoaded, fontError] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold });
   const ready = !loading && (fontsLoaded || !!fontError);
   useEffect(() => { if (ready) void SplashScreen.hideAsync(); }, [ready]);
   // Wait for the navigator: a notification tap that opens the app navigates as soon as the account is known.
-  usePushNotifications(ready ? session?.user.id : undefined, invalidate);
+  usePushNotifications(ready ? session?.user.id : undefined, invalidate, offline);
   if (!ready) return null;
   const base = dark ? DarkTheme : DefaultTheme;
   return <ThemeProvider value={{ ...base, colors: { ...base.colors, background: colors.background, card: colors.surface, text: colors.text, primary: colors.primary, border: colors.border } }}>

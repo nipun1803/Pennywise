@@ -26,6 +26,7 @@ export class ApiError extends Error {
   constructor(message: string, public status = 0, public code = 'NETWORK_ERROR') { super(message); }
 }
 let token: string | null = null;
+export const getSessionToken = () => token;
 let expire: (() => void) | undefined;
 const pending = new Set<AbortController>();
 export function configureSession(value: string | null, onExpired?: () => void) {
