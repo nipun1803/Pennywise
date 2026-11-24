@@ -5,10 +5,10 @@ import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createApp } from '../../src/app';
-import { User, Group, Expense, Settlement, Category, ensureIndexes } from '../../src/models';
+import { User, Group, Expense, Settlement, Category, PushReceipt, ensureIndexes } from '../../src/models';
 import { TOKEN_OPTIONS } from '../../src/middleware/auth';
 import { balancesFor } from '../../src/services/ledger';
-import { flushNotifications, setPushSender, type PushMessage, type PushTicket } from '../../src/services/notifications';
+import { checkPushReceipts, flushNotifications, setPushReceiptReader, setPushSender, type PushMessage, type PushTicket } from '../../src/services/notifications';
 
 const secret = 'pennywise-isolated-test-secret-32-characters';
 const app = createApp({ jwtSecret: secret, corsOrigins: ['http://localhost:8081'] });
@@ -26,7 +26,7 @@ const postExpense = (key = randomUUID(), body: Record<string, unknown> = expense
 const postPayment = (key = randomUUID(), body = paymentBody(), token = alice.token) => request(app).post(`/groups/${groupId}/settlements`).set('Authorization', auth(token)).set('Idempotency-Key', key).send(body);
 
 // Pushes are fire-and-forget jobs. Default to a no-op sender so no test can reach Expo's servers.
-const silentPush = async () => [] as PushTicket[];
+const silentPush = async (messages: PushMessage[]) => messages.map(() => ({ status: 'ok' as const }));
 beforeAll(async () => {
   setPushSender(silentPush);
   // Standalone instance: these tests deliberately do not use a replica set.
@@ -43,11 +43,13 @@ beforeAll(async () => {
 beforeEach(async () => {
   // Let the previous test's push jobs finish before their data is wiped.
   await flushNotifications();
-  await Promise.all([Group.deleteMany({}), Expense.deleteMany({}), Settlement.deleteMany({}), Category.deleteMany({})]);
+  setPushSender(silentPush);
+  await Promise.all([Group.deleteMany({}), Expense.deleteMany({}), Settlement.deleteMany({}), Category.deleteMany({}), PushReceipt.deleteMany({})]);
   const result = await request(app).post('/groups').set('Authorization', auth()).send({ name: 'Weekend trip' });
   expect(result.status).toBe(201);
   groupId = result.body.data.id; code = result.body.data.joinCode;
   for (const user of [bob, charlie]) expect((await request(app).post('/groups/join').set('Authorization', auth(user.token)).send({ code })).status).toBe(200);
+  await flushNotifications();
 });
 afterAll(async () => {
   await flushNotifications();
@@ -659,10 +661,11 @@ describe('push notifications', () => {
   beforeEach(async () => {
     sent = []; tickets = () => ({ status: 'ok' });
     setPushSender(async messages => { sent.push(...messages); return messages.map(tickets); });
+    setPushReceiptReader(async () => ({}));
     await User.updateMany({}, { $set: { pushTokens: [], notifications: { expenses: true, payments: true, members: true } } });
     for (const user of [alice, bob, charlie]) expect((await register(user)).status).toBe(204);
   });
-  afterAll(() => setPushSender(silentPush));
+  afterAll(() => { setPushSender(silentPush); setPushReceiptReader(null); });
 
   test('device tokens are validated, moved to the latest account, and removable', async () => {
     expect((await register(alice, 'not-a-token')).status).toBe(400);
@@ -751,17 +754,66 @@ describe('push notifications', () => {
     expect(await pushed()).toHaveLength(0);
   });
   test('tokens reported as unregistered are pruned, and a failing push service never fails the request', async () => {
+    const failure = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     tickets = message => message.to === device(bob) ? { status: 'error', details: { error: 'DeviceNotRegistered' } } : { status: 'ok' };
     expect((await postExpense()).status).toBe(201);
     await flushNotifications();
     expect((await User.findById(bob.id).select('+pushTokens'))!.pushTokens).toEqual([]);
     expect((await User.findById(charlie.id).select('+pushTokens'))!.pushTokens).toEqual([device(charlie)]);
-    const failure = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     setPushSender(async () => { throw new Error('Expo is down'); });
     expect((await postExpense()).status).toBe(201);
     await flushNotifications();
     expect(failure).toHaveBeenCalledWith('Push notification failed:', 'Expo is down');
     failure.mockRestore();
+  });
+  test('credential ticket errors are reported without exposing device tokens or failing the expense', async () => {
+    const failure = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      tickets = () => ({ status: 'error', details: { error: 'InvalidCredentials' } });
+      expect((await postExpense()).status).toBe(201);
+      await flushNotifications();
+      expect(failure).toHaveBeenCalledWith('Push ticket rejected:', 'InvalidCredentials');
+      expect(JSON.stringify(failure.mock.calls)).not.toContain('ExponentPushToken');
+      expect((await User.findById(bob.id).select('+pushTokens'))!.pushTokens).toContain(device(bob));
+    } finally { failure.mockRestore(); }
+  });
+  test('accepted pushes persist receipts; later delivery errors prune only dead tokens', async () => {
+    const failure = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      tickets = () => ({ status: 'ok', id: randomUUID() });
+      expect((await postExpense()).status).toBe(201);
+      await flushNotifications();
+      const pending = await PushReceipt.find().lean();
+      expect(pending).toHaveLength(2);
+      const reader = jest.fn(async () => Object.fromEntries(pending.map(r => [r.ticketId, { status: 'error' as const, details: { error: r.token === device(bob) ? 'DeviceNotRegistered' : 'MismatchSenderId' } }])));
+      setPushReceiptReader(reader);
+      await checkPushReceipts();
+      expect(reader).not.toHaveBeenCalled();
+      await checkPushReceipts(new Date(Date.now() + 16 * 60 * 1000));
+      expect((await User.findById(bob.id).select('+pushTokens'))!.pushTokens).toEqual([]);
+      expect((await User.findById(charlie.id).select('+pushTokens'))!.pushTokens).toEqual([device(charlie)]);
+      expect(failure).toHaveBeenCalledWith('Push delivery failed:', 'MismatchSenderId', 'ticket:', expect.any(String));
+      expect(await PushReceipt.countDocuments()).toBe(0);
+    } finally { failure.mockRestore(); }
+  });
+  test('missing receipts and receipt-service failures remain queued for a later check', async () => {
+    const warning = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      tickets = () => ({ status: 'ok', id: randomUUID() });
+      await postExpense(); await flushNotifications();
+      const now = Date.now();
+      await checkPushReceipts(new Date(now + 16 * 60 * 1000));
+      expect(await PushReceipt.countDocuments()).toBe(2);
+      setPushReceiptReader(async () => { throw new Error('Receipt service down'); });
+      await expect(checkPushReceipts(new Date(now + 32 * 60 * 1000))).rejects.toThrow('Receipt service down');
+      expect(await PushReceipt.countDocuments()).toBe(2);
+      const reader = jest.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, { status: 'ok' as const }])));
+      setPushReceiptReader(reader);
+      await checkPushReceipts(new Date(now + 33 * 60 * 1000));
+      expect(reader).not.toHaveBeenCalled();
+      await checkPushReceipts(new Date(now + 48 * 60 * 1000));
+      expect(await PushReceipt.countDocuments()).toBe(0);
+    } finally { warning.mockRestore(); }
   });
 });
 

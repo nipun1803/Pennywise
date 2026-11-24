@@ -237,7 +237,7 @@ sequenceDiagram
   end
 ```
 
-Push failures are logged and swallowed. `flushNotifications()` lets tests and graceful shutdown wait for in-flight pushes.
+Push failures are logged and swallowed. Initial sends remain best-effort. Accepted ticket IDs and tokens (no notification bodies) are stored in the `PushReceipt` collection. A background poll claims due receipts with a 15-minute lease, checks Expo delivery receipts, reports provider error codes, and prunes `DeviceNotRegistered` tokens. Missing receipts and failed lookups retry; a 24-hour TTL bounds retention. The lease avoids overlapping processing across polls/replicas. `flushNotifications()` lets tests and graceful shutdown wait for in-flight pushes and receipt checks before disconnecting MongoDB.
 
 ## Client architecture
 

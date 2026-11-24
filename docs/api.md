@@ -192,7 +192,7 @@ JWTs use HS256, subject=user ID, issuer=`pennywise`, audience=`pennywise-app`, a
 
 ### Push notifications
 
-Pushes are sent through the Expo push service (backed by Firebase Cloud Messaging on Android) after a write succeeds; a failed push never fails the request. The acting user is never notified of their own action.
+Pushes are sent through the Expo push service (backed by Firebase Cloud Messaging on Android) after a write succeeds; a failed push never fails the request. The acting user is never notified of their own action. Accepted ticket IDs are retained for delivery-receipt checks after 15 minutes; provider failures are logged by code and unregistered tokens are pruned. Initial sends are still best-effort rather than a durable retry queue.
 
 | Type (`notifications.*`) | Sent to | When |
 | --- | --- | --- |
