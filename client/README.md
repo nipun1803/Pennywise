@@ -116,10 +116,19 @@ The server sends pushes through Expo's push service when someone adds, edits or 
 
 Client side (`src/lib/push.ts`, `src/hooks/use-push-notifications.ts`):
 - Registration is **Android-only, real devices only**, after sign-in. It creates the `default` channel, asks permission (Android 13+), gets an Expo push token for the EAS project id in `app.json`, and registers it with `PUT /me/push-token`. Logging out removes it with `DELETE`. A token belongs to whoever signed in last on that device.
-- Registration is best-effort and silent: Expo Go, emulators, denied permission or a build without Firebase config simply skip push.
-- Notifications shown while the app is open refresh the current screens.
+- Registration never blocks sign-in. **Profile → Notifications** shows registration status, permission/channel blocks and errors, with a check/retry button and a link to Android settings. Registration retries transient failures three times with backoff and rechecks after reconnect, foregrounding and native token rotation. Expo Go and emulators remain unsupported by this client.
+- Notifications shown while the app is open refresh the current screens and allow banners/sound. New `default` channels use HIGH importance; Android preserves the user's existing channel settings, so enable **Pop on screen** manually if an older install shows alerts only in the tray.
+- The last registered token is retained on the device across restarts for logout cleanup. In-flight registration is cancelled on account changes so it cannot register for the wrong session.
+- The server stores accepted Expo ticket IDs in MongoDB, checks delivery receipts after 15 minutes, logs credential errors by code, and removes tokens reported as `DeviceNotRegistered`. Receipt checks retry after service failures and survive backend restarts. An accepted ticket does **not** guarantee phone delivery; initial sends are still best-effort, not a durable retry queue.
 
-To enable push in your own project: create a Firebase project and Android app with package `com.nipun_appdev.pennywise`, put its `google-services.json` in `client/`, upload an FCM service account key to your EAS project (`eas credentials`), and build a development or preview build. Optionally set `EXPO_ACCESS_TOKEN` on the server if you enable Expo's enhanced push security.
+To enable push in your own project: create a Firebase project and Android app with package `com.nipun_appdev.pennywise`, put its `google-services.json` in `client/`, upload an **FCM V1 service account key** from the same Firebase project to your Expo project (`npx eas-cli@latest credentials -p android`), and build a development or preview build. Set `EXPO_ACCESS_TOKEN` on the server if you enable Expo's enhanced push security; otherwise it is optional. Never commit service account private keys.
+
+Verification after deploying the server and installing the updated build:
+1. On device B, sign in and use **Profile → Notifications → Check notification registration**. Allow Android permission; keep the relevant preference enabled.
+2. On account A, add an expense that includes B. Check B's banner while foregrounded, then repeat with B backgrounded; tap the alert to open the group. A should receive no self-notification.
+3. Test edits, deletes, payments, joining, and muting each preference. Turn a preference back on before the next test.
+4. Disconnect B during registration, reconnect, and confirm registration recovers. Disable notifications in Android settings, return to the app, then re-enable them and return again.
+5. If registration succeeds but no push arrives, check server logs immediately for `Push ticket rejected`/`Push notification failed`, then after 15–16 minutes for `Push delivery failed`. `InvalidCredentials` means repair the uploaded FCM V1 key; `MismatchSenderId` means the key and `google-services.json` do not match; `UNAUTHORIZED` means check `EXPO_ACCESS_TOKEN` and Expo's enhanced security setting.
 
 ## Photos
 
